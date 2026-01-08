@@ -1,0 +1,63 @@
+{
+  "version": 5,
+  "order_id": "test1",
+  "start_dt": "2026-01-08T00:00:00",
+  "equipment": [
+    {
+      "equipment_id": "001",
+      "total_count": 1,
+      "available_count": 1
+    },
+    {
+      "equipment_id": "002",
+      "total_count": 1,
+      "available_count": 1
+    },
+    {
+      "equipment_id": "003",
+      "total_count": 1,
+      "available_count": 0
+    }
+  ],
+  "employees": [],
+  "products": [
+    {
+      "product_id": "a1",
+      "part_number": "ldfja",
+      "quantity": 1,
+      "phases": []
+    },
+    {
+      "product_id": "b1",
+      "part_number": "ldfjaasd",
+      "quantity": 1,
+      "phases": [
+        {
+          "name": "采购",
+          "planned_hours": 24.0,
+          "done": false,
+          "parallel_group": 0,
+          "equipment_id": "001",
+          "assigned_employee": ""
+        }
+      ]
+    }
+  ],
+  "events": [
+    {
+      "day": "2026-01-08",
+      "hours_lost": 8.0,
+      "reason": "员工请假"
+    },
+    {
+      "day": "2026-01-08",
+      "hours_lost": 8.0,
+      "reason": "员工请假"
+    },
+    {
+      "day": "2026-01-08",
+      "hours_lost": 5.0,
+      "reason": "停电"
+    }
+  ]
+}

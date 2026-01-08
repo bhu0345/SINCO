@@ -1,0 +1,68 @@
+{
+  "version": 1,
+  "event_reasons": [
+    "员工请假",
+    "设备故障",
+    "停电",
+    "材料短缺",
+    "质量问题",
+    "其他"
+  ],
+  "templates": {
+    "equipment": [
+      {
+        "equipment_id": "001",
+        "total_count": 1,
+        "available_count": 1
+      },
+      {
+        "equipment_id": "002",
+        "total_count": 1,
+        "available_count": 1
+      },
+      {
+        "equipment_id": "003",
+        "total_count": 1,
+        "available_count": 0
+      }
+    ],
+    "phases": [],
+    "employees": [],
+    "shifts": [
+      {
+        "name": "周六两班",
+        "week_plan": [
+          {
+            "shift_count": 1,
+            "hours_per_shift": 8.0
+          },
+          {
+            "shift_count": 1,
+            "hours_per_shift": 8.0
+          },
+          {
+            "shift_count": 1,
+            "hours_per_shift": 8.0
+          },
+          {
+            "shift_count": 1,
+            "hours_per_shift": 8.0
+          },
+          {
+            "shift_count": 1,
+            "hours_per_shift": 8.0
+          },
+          {
+            "shift_count": 2,
+            "hours_per_shift": 8.0
+          },
+          {
+            "shift_count": 0,
+            "hours_per_shift": 0.0
+          }
+        ]
+      }
+    ],
+    "active_shift": "周六两班"
+  }
+}

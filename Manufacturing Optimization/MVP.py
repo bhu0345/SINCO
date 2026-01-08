@@ -1,21 +1,75 @@
-import tkinter as tk
-from tkinter import ttk, messagebox
-from dataclasses import dataclass, field, asdict
-from datetime import datetime, timedelta, date
-from typing import List, Dict, Optional
 import json
 import os
+from dataclasses import dataclass, field
+from datetime import datetime, timedelta, date
+from typing import List, Dict, Optional
+
+try:
+    from PySide6 import QtCore, QtGui, QtWidgets
+    QT_BINDING = "PySide6"
+except ImportError:  # pragma: no cover - fallback for environments without PySide6
+    try:
+        from PyQt6 import QtCore, QtGui, QtWidgets
+        QT_BINDING = "PyQt6"
+    except ImportError as exc:  # pragma: no cover
+        raise SystemExit("Please install PySide6 or PyQt6 to run this app.") from exc
+
+
+ADMIN_PASSWORD = "admin123"
 
 # ----------------------------
 # Data models
 # ----------------------------
+
 
 @dataclass
 class Phase:
     name: str
     planned_hours: float
     done: bool = False
-    parallel_group: int = 0  # 0=顺序执行, >0=并行组编号
+    parallel_group: int = 0
+    equipment_id: str = ""
+    assigned_employee: str = ""
+
+
+@dataclass
+class Product:
+    product_id: str
+    part_number: str = ""
+    quantity: int = 1
+    phases: List[Phase] = field(default_factory=list)
+
+
+@dataclass
+class Equipment:
+    equipment_id: str
+    total_count: int = 1
+    available_count: int = 1
+
+
+@dataclass
+class ShiftDayPlan:
+    shift_count: int = 1
+    hours_per_shift: float = 8.0
+
+    def total_hours(self) -> float:
+        return max(0, self.shift_count) * max(0.0, self.hours_per_shift)
+
+
+@dataclass
+class ShiftTemplate:
+    name: str
+    week_plan: List[ShiftDayPlan] = field(default_factory=list)
+
+    def hours_for_weekday(self, weekday: int) -> float:
+        if weekday < 0:
+            return 0.0
+        if len(self.week_plan) < 7:
+            return 0.0
+        if weekday >= len(self.week_plan):
+            return 0.0
+        return self.week_plan[weekday].total_hours()
+
 
 @dataclass
 class Event:
@@ -23,55 +77,83 @@ class Event:
     hours_lost: float
     reason: str
 
+
 @dataclass
 class Order:
     order_id: str
     start_dt: datetime
-    phases: List[Phase] = field(default_factory=list)
+    products: List[Product] = field(default_factory=list)
     events: List[Event] = field(default_factory=list)
-    lathe_ops: int = 2
-    blank_lead_days: int = 3
-    quantity: int = 1  # 订单数量
+    equipment: List[Equipment] = field(default_factory=list)
+    employees: List[str] = field(default_factory=list)
+
 
 # ----------------------------
 # Scheduling / ETA computation
 # ----------------------------
 
 class WorkCalendar:
-    def __init__(self, working_hours_per_day: float = 8.0):
-        self.working_hours_per_day = working_hours_per_day
+    def __init__(self, shift_template: Optional[ShiftTemplate] = None):
+        self.shift_template = shift_template
 
-    @staticmethod
-    def is_workday(d: date) -> bool:
-        return d.weekday() < 5  # Mon-Fri
+    def capacity_for_day(self, d: date) -> float:
+        if not self.shift_template:
+            return 0.0
+        return self.shift_template.hours_for_weekday(d.weekday())
+
+
+def _equipment_available_map(order: Order) -> Dict[str, int]:
+    result: Dict[str, int] = {}
+    for eq in order.equipment:
+        if not eq.equipment_id:
+            continue
+        result[eq.equipment_id] = max(0, int(eq.available_count))
+    return result
+
+
+def _phase_effective_hours(phase: Phase, quantity: int, equipment_map: Dict[str, int]) -> float:
+    qty = max(int(quantity), 1)
+    base = phase.planned_hours * qty
+    hours = base
+    if phase.equipment_id:
+        available = equipment_map.get(phase.equipment_id, 1)
+        if available > 0:
+            hours = hours / available
+    return hours
+
+
+def _product_remaining_hours(product: Product, equipment_map: Dict[str, int]) -> float:
+    total = 0.0
+    parallel_groups: Dict[int, List[float]] = {}
+    for phase in product.phases:
+        if phase.done:
+            continue
+        hours = _phase_effective_hours(phase, product.quantity, equipment_map)
+        if phase.parallel_group > 0:
+            parallel_groups.setdefault(phase.parallel_group, []).append(hours)
+        else:
+            total += hours
+    for group_hours in parallel_groups.values():
+        total += max(group_hours)
+    return total
+
+
+def _product_progress(product: Product, equipment_map: Dict[str, int]) -> float:
+    total = 0.0
+    done = 0.0
+    for phase in product.phases:
+        hours = _phase_effective_hours(phase, product.quantity, equipment_map)
+        total += hours
+        if phase.done:
+            done += hours
+    if total <= 0:
+        return 0.0
+    return min(done / total, 1.0)
+
 
 def compute_eta(order: Order, cal: WorkCalendar) -> Dict[str, object]:
-    # 计算实际总工时（考虑并行工序）
-    def calculate_total_hours(phases: List[Phase]) -> float:
-        """计算考虑并行的总工时"""
-        total = 0.0
-        parallel_groups = {}
-        
-        for p in phases:
-            if p.done:
-                continue
-            
-            if p.parallel_group == 0:
-                # 顺序执行的工序，直接累加
-                total += p.planned_hours
-            else:
-                # 并行工序，记录到对应的组
-                if p.parallel_group not in parallel_groups:
-                    parallel_groups[p.parallel_group] = []
-                parallel_groups[p.parallel_group].append(p.planned_hours)
-        
-        # 对于每个并行组，只计入最长的工时
-        for group_hours in parallel_groups.values():
-            total += max(group_hours)
-        
-        return total
-    
-    remaining_hours = calculate_total_hours(order.phases)
+    equipment_map = _equipment_available_map(order)
+    remaining_hours = sum(_product_remaining_hours(p, equipment_map) for p in order.products)
 
     lost_map: Dict[date, float] = {}
     reason_map: Dict[date, List[str]] = {}
@@ -79,33 +161,22 @@ def compute_eta(order: Order, cal: WorkCalendar) -> Dict[str, object]:
         lost_map[ev.day] = lost_map.get(ev.day, 0.0) + ev.hours_lost
         reason_map.setdefault(ev.day, []).append(f"{ev.reason}(-{ev.hours_lost:g}h)")
 
-    explanation = []
-    
-    # 统计并行组信息
-    parallel_info = {}
-    parallel_hours = {}  # 记录实际工时
-    for p in order.phases:
-        if not p.done and p.parallel_group > 0:
-            if p.parallel_group not in parallel_info:
-                parallel_info[p.parallel_group] = []
-                parallel_hours[p.parallel_group] = []
-            parallel_info[p.parallel_group].append(f"{p.name}({p.planned_hours:g}h)")
-            parallel_hours[p.parallel_group].append(p.planned_hours)
-    
-    if parallel_info:
-        explanation.append("=== 并行工序组 ===")
-        for group in sorted(parallel_info.keys()):
-            phases = parallel_info[group]
-            max_hours = max(parallel_hours[group])
-            explanation.append(f"并行组{group}: {', '.join(phases)} -> 取最长{max_hours:g}h")
+    explanation: List[str] = []
+    if order.products:
+        explanation.append("Product workload summary:")
+        for p in order.products:
+            hours = _product_remaining_hours(p, equipment_map)
+            explanation.append(
+                f"- {p.product_id} (PN={p.part_number or '-'} qty={p.quantity}): {hours:g}h"
+            )
         explanation.append("")
-    
+
     if remaining_hours <= 0:
         return {
             "eta_dt": order.start_dt,
             "remaining_hours": 0.0,
             "daily_capacity_map": {},
-            "explanation": ["所有工序已完成。预计交期 = 开始时间。"]
+            "explanation": explanation + ["All phases completed. ETA equals start time."]
         }
 
     current_day = order.start_dt.date()
@@ -113,14 +184,15 @@ def compute_eta(order: Order, cal: WorkCalendar) -> Dict[str, object]:
     daily_capacity_map: Dict[date, float] = {}
 
     for _ in range(3650):
-        if cal.is_workday(current_day):
+        base_cap = cal.capacity_for_day(current_day)
+        if base_cap > 0:
             lost = lost_map.get(current_day, 0.0)
-            cap = max(cal.working_hours_per_day - lost, 0.0)
+            cap = max(base_cap - lost, 0.0)
             daily_capacity_map[current_day] = cap
 
             if lost > 0:
                 explanation.append(
-                    f"{current_day.isoformat()}: capacity {cal.working_hours_per_day:g}h - lost {lost:g}h => {cap:g}h "
+                    f"{current_day.isoformat()}: capacity {base_cap:g}h - lost {lost:g}h => {cap:g}h "
                     f"({', '.join(reason_map.get(current_day, []))})"
                 )
 
@@ -132,817 +204,2078 @@ def compute_eta(order: Order, cal: WorkCalendar) -> Dict[str, object]:
                         "eta_dt": finish_time,
                         "remaining_hours": remaining_hours,
                         "daily_capacity_map": daily_capacity_map,
-                        "explanation": explanation or ["没有影响进度的事件。"]
+                        "explanation": explanation or ["No blocking events."]
                     }
-                else:
-                    hours_left -= cap
+                hours_left -= cap
         current_day = current_day + timedelta(days=1)
 
-    raise RuntimeError("交期计算超出安全限制。")
+    raise RuntimeError("ETA computation exceeded safe bounds.")
+
 
 # ----------------------------
-# Phase generation helpers
+# Qt UI
 # ----------------------------
 
-def build_lathe_chain(n_ops: int, hours_lathe: float = 12.0, hours_insp: float = 4.0) -> List[Phase]:
-    phases: List[Phase] = []
-    for i in range(1, n_ops + 1):
-        phases.append(Phase(f"车床工序{i}", hours_lathe))
-        phases.append(Phase(f"检验{i}", hours_insp))
-    return phases
 
-def template_with_mold(lathe_ops: int) -> List[Phase]:
-    phases = [
-        Phase("模具开发(外协)", 80),
-        Phase("工装夹具制作", 24),
-        Phase("制定加工工艺", 16),
-        Phase("量具/刀具准备", 8),
-        Phase("采购(物料/毛坯)", 16),
-    ]
-    phases += build_lathe_chain(lathe_ops)
-    phases += [
-        Phase("表面处理(阳极/试漏等)", 16),
-        Phase("检验入库", 8),
-        Phase("包装", 8),
-        Phase("等待发货", 0),
-    ]
-    return phases
+def _qdate_to_date(qdate: QtCore.QDate) -> date:
+    return date(qdate.year(), qdate.month(), qdate.day())
 
-def template_no_mold(lathe_ops: int) -> List[Phase]:
-    phases = [
-        Phase("制定工艺路线", 12),
-        Phase("采购刀具量具", 8),
-        Phase("工装夹具制作", 24),
-        Phase("采购(物料/毛坯)", 16),
-    ]
-    phases += build_lathe_chain(lathe_ops)
-    phases += [
-        Phase("表面处理(阳极/试漏等)", 16),
-        Phase("检验入库", 8),
-        Phase("包装", 8),
-        Phase("等待发货", 0),
-    ]
-    return phases
 
-# ----------------------------
-# GUI
-# ----------------------------
+def _date_to_qdate(d: date) -> QtCore.QDate:
+    return QtCore.QDate(d.year, d.month, d.day)
 
-class ETAGUI(tk.Tk):
+
+def _chinese_locale() -> QtCore.QLocale:
+    try:
+        return QtCore.QLocale(QtCore.QLocale.Language.Chinese, QtCore.QLocale.Country.China)
+    except AttributeError:
+        return QtCore.QLocale(QtCore.QLocale.Chinese, QtCore.QLocale.China)
+
+
+class MainWindow(QtWidgets.QMainWindow):
     def __init__(self):
         super().__init__()
-        self.title("生产交期预测系统 v2")
-        self.geometry("1200x750")
-        
-        print("正在初始化GUI...")  # 调试输出
+        self.setWindowTitle("生产交期优化系统 V3.0")
+        self.resize(1280, 820)
 
-        self.cal = WorkCalendar(working_hours_per_day=8.0)
+        self.locale_cn = _chinese_locale()
+        QtCore.QLocale.setDefault(self.locale_cn)
+
         self.order: Optional[Order] = None
-        self.route_mode = "with_mold"
-        self.save_file = "order_data.json"
+        self.equipment: List[Equipment] = []
+        self.employees: List[str] = []
+        self.event_reasons = ["员工请假", "设备故障", "停电", "材料短缺", "质量问题", "其他"]
+        self.admin_password = ADMIN_PASSWORD
+        self.autosave_path: Optional[str] = None
+        self.app_template_path = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)), "app_templates.json"
+        )
+        self.equipment_templates: List[Equipment] = []
+        self.phase_templates: List[Phase] = []
+        self.employee_templates: List[str] = []
+        self.shift_templates: List[ShiftTemplate] = []
+        self.active_shift_template_name = ""
+        self._load_app_templates()
+        self._ensure_default_templates()
+        self.cal = WorkCalendar(self._current_shift_template())
 
-        print("开始构建UI...")  # 调试输出
-        self._build_ui()
-        print("UI构建完成")  # 调试输出
-        
-        self._load_order()  # 启动时自动加载
-        
-        # 如果没有加载到订单，显示欢迎信息
-        if not self.order:
-            self._explain("欢迎使用生产交期预测系统！")
-            self._explain("请点击'创建/重置订单'按钮开始。")
-        
-        print("GUI初始化完成，窗口应该已显示")  # 调试输出
-        
-        # 强制更新窗口显示
-        self.update_idletasks()
-        self.update()
-        
-        # 确保窗口显示在最前面（macOS可能需要）
-        self.lift()
-        self.attributes('-topmost', True)
-        self.after(100, lambda: self.attributes('-topmost', False))
-        
-        print(f"窗口大小: {self.winfo_width()}x{self.winfo_height()}")
-        print(f"窗口位置: ({self.winfo_x()}, {self.winfo_y()})")
-        print(f"窗口是否可见: {self.winfo_viewable()}")
+        self.stack = QtWidgets.QStackedWidget()
+        self.setCentralWidget(self.stack)
 
-    def _build_ui(self):
-        # 添加背景色，使窗口内容更明显
-        self.configure(bg='#f0f0f0')
-        
-        # 添加醒目的标题
-        # title_frame = ttk.Frame(self)
-        # title_frame.pack(fill="x", padx=10, pady=(10, 0))
-        # title_label = tk.Label(title_frame, text="生产交期预测系统 v2", 
-        #                       font=("Helvetica", 16, "bold"), 
-        #                       bg='#2196F3', fg='white', pady=10)
-        # title_label.pack(fill="x")
-        
-        top = ttk.Frame(self)
-        top.pack(fill="x", padx=10, pady=10)
+        self.dashboard = self._build_dashboard()
+        self.detail_page = self._build_detail_page()
+        self.admin_page = self._build_admin_page()
 
-        # 第一行
-        ttk.Label(top, text="订单编号").grid(row=0, column=0, sticky="w")
-        self.order_id_var = tk.StringVar(value="O-001")
-        ttk.Entry(top, textvariable=self.order_id_var, width=16).grid(row=0, column=1, padx=6)
+        self.stack.addWidget(self.dashboard)
+        self.stack.addWidget(self.detail_page)
+        self.stack.addWidget(self.admin_page)
+        self.stack.setCurrentWidget(self.dashboard)
 
-        ttk.Label(top, text="订单数量（件）").grid(row=0, column=2, sticky="w", padx=(10,0))
-        self.quantity_var = tk.StringVar(value="1")
-        ttk.Entry(top, textvariable=self.quantity_var, width=10).grid(row=0, column=3, padx=6)
+        self.statusBar().showMessage(f"Using {QT_BINDING}")
 
-        self.route_var = tk.StringVar(value="with_mold")
-        ttk.Radiobutton(top, text="需要模具开发", variable=self.route_var, value="with_mold").grid(row=0, column=4, padx=10)
-        ttk.Radiobutton(top, text="不需要模具开发", variable=self.route_var, value="no_mold").grid(row=0, column=5, padx=10)
+    # ------------------------
+    # Dashboard UI
+    # ------------------------
 
-        # 第二行
-        ttk.Label(top, text="车床工序数N").grid(row=1, column=0, sticky="w")
-        self.lathe_ops_var = tk.StringVar(value="2")
-        ttk.Entry(top, textvariable=self.lathe_ops_var, width=16).grid(row=1, column=1, padx=6)
+    def _setup_date_edit(self, date_edit: QtWidgets.QDateEdit) -> None:
+        date_edit.setCalendarPopup(True)
+        date_edit.setLocale(self.locale_cn)
+        date_edit.setDisplayFormat("yyyy年MM月dd日")
+        calendar = date_edit.calendarWidget()
+        if calendar:
+            calendar.setLocale(self.locale_cn)
 
-        ttk.Label(top, text="重采毛坯周期(天)").grid(row=1, column=2, sticky="w", padx=(10,0))
-        self.blank_days_var = tk.StringVar(value="3")
-        ttk.Entry(top, textvariable=self.blank_days_var, width=10).grid(row=1, column=3, padx=6)
+    def _build_dashboard(self) -> QtWidgets.QWidget:
+        page = QtWidgets.QWidget()
+        layout = QtWidgets.QVBoxLayout(page)
 
-        # 按钮组
-        btn_frame = ttk.Frame(top)
-        btn_frame.grid(row=0, column=6, rowspan=2, padx=10)
-        ttk.Button(btn_frame, text="创建/重置订单", command=self.create_order).pack(pady=2)
-        ttk.Button(btn_frame, text="保存订单", command=self.save_order).pack(pady=2)
-        ttk.Button(btn_frame, text="加载订单", command=self.load_order_button).pack(pady=2)
+        header = QtWidgets.QGroupBox("订单管理")
+        header_layout = QtWidgets.QGridLayout(header)
 
-        ttk.Separator(self).pack(fill="x", padx=10, pady=6)
+        self.order_id_edit = QtWidgets.QLineEdit()
+        self.order_id_edit.setPlaceholderText("O-001")
+        self.start_date_edit = QtWidgets.QDateEdit()
+        self.start_date_edit.setDate(QtCore.QDate.currentDate())
+        self._setup_date_edit(self.start_date_edit)
 
-        main = ttk.Frame(self)
-        main.pack(fill="both", expand=True, padx=10, pady=10)
+        header_layout.addWidget(QtWidgets.QLabel("订单编号"), 0, 0)
+        header_layout.addWidget(self.order_id_edit, 0, 1)
+        header_layout.addWidget(QtWidgets.QLabel("开始日期"), 0, 2)
+        header_layout.addWidget(self.start_date_edit, 0, 3)
 
-        left = ttk.Frame(main)
-        left.pack(side="left", fill="both", expand=True)
+        self.create_order_btn = QtWidgets.QPushButton("创建订单")
+        self.create_order_btn.clicked.connect(self.create_order)
+        self.save_order_btn = QtWidgets.QPushButton("保存订单")
+        self.save_order_btn.clicked.connect(self.save_order)
+        self.load_order_btn = QtWidgets.QPushButton("加载订单")
+        self.load_order_btn.clicked.connect(self.load_order)
+        self.goto_detail_btn = QtWidgets.QPushButton("进入订单详情")
+        self.goto_detail_btn.clicked.connect(self.go_to_detail)
+        self.admin_btn = QtWidgets.QPushButton("管理员")
+        self.admin_btn.clicked.connect(self.open_admin_login)
 
-        right = ttk.Frame(main)
-        right.pack(side="right", fill="y")
+        header_layout.addWidget(self.create_order_btn, 0, 4)
+        header_layout.addWidget(self.save_order_btn, 0, 5)
+        header_layout.addWidget(self.load_order_btn, 0, 6)
+        header_layout.addWidget(self.goto_detail_btn, 0, 7)
+        header_layout.addWidget(self.admin_btn, 0, 8)
 
-        ttk.Label(left, text="工序阶段（可按住Ctrl多选工序，然后设置并行）").pack(anchor="w")
-        self.phase_tree = ttk.Treeview(left, columns=("name", "hours", "parallel", "done"), show="headings", height=18, selectmode="extended")
-        self.phase_tree.heading("name", text="工序名称")
-        self.phase_tree.heading("hours", text="计划工时")
-        self.phase_tree.heading("parallel", text="执行方式")
-        self.phase_tree.heading("done", text="已完成？")
-        self.phase_tree.column("name", width=280, anchor="w")
-        self.phase_tree.column("hours", width=90, anchor="center")
-        self.phase_tree.column("parallel", width=90, anchor="center")
-        self.phase_tree.column("done", width=80, anchor="center")
-        self.phase_tree.pack(fill="both", expand=True, pady=6)
-        self.phase_tree.bind("<<TreeviewSelect>>", self._on_phase_select)
+        layout.addWidget(header)
 
-        edit = ttk.Frame(left)
-        edit.pack(fill="x", pady=6)
+        mid = QtWidgets.QHBoxLayout()
+        layout.addLayout(mid)
 
-        # 工序编辑部分
-        edit_row1 = ttk.Frame(edit)
-        edit_row1.pack(fill="x", pady=2)
-        ttk.Label(edit_row1, text="工序名称:").pack(side="left")
-        self.phase_name_var = tk.StringVar(value="")
-        ttk.Entry(edit_row1, textvariable=self.phase_name_var, width=18).pack(side="left", padx=4)
-        ttk.Label(edit_row1, text="工时:").pack(side="left")
-        self.phase_hours_var = tk.StringVar(value="")
-        ttk.Entry(edit_row1, textvariable=self.phase_hours_var, width=8).pack(side="left", padx=4)
-        ttk.Button(edit_row1, text="添加新工序", command=self.add_phase).pack(side="left", padx=6)
-        
-        edit_row2 = ttk.Frame(edit)
-        edit_row2.pack(fill="x", pady=2)
-        ttk.Button(edit_row2, text="更新工时", command=self.update_phase_hours).pack(side="left", padx=6)
-        ttk.Button(edit_row2, text="更新名称", command=self.update_phase_name).pack(side="left", padx=6)
-        ttk.Button(edit_row2, text="切换完成状态", command=self.toggle_phase_done).pack(side="left", padx=6)
-        ttk.Button(edit_row2, text="删除工序", command=self.delete_phase).pack(side="left", padx=6)
-        
-        edit_row3 = ttk.Frame(edit)
-        edit_row3.pack(fill="x", pady=2)
-        ttk.Label(edit_row3, text="⏸️ 并行设置:").pack(side="left")
-        ttk.Button(edit_row3, text="设为并行工序", command=self.set_parallel_group).pack(side="left", padx=6)
-        ttk.Button(edit_row3, text="取消并行(改为顺序)", command=self.clear_parallel).pack(side="left", padx=6)
-        ttk.Button(edit_row3, text="报废重做", command=self.report_scrap).pack(side="left", padx=12)
-        ttk.Button(edit_row3, text="重新计算交期", command=self.refresh_eta).pack(side="right")
+        equipment_group = QtWidgets.QGroupBox("设备可用性")
+        equipment_layout = QtWidgets.QVBoxLayout(equipment_group)
 
-        # 并行组说明
-        hint = ttk.Label(edit, text="💡 并行操作: 先选中多个工序(按住Ctrl多选), 然后点击'设为并行工序'即可让它们同时进行", 
-                        foreground="blue", font=("", 9))
-        hint.pack(anchor="w", pady=2)
+        self.equipment_table = QtWidgets.QTableWidget(0, 3)
+        self.equipment_table.setHorizontalHeaderLabels(["设备编号", "总数量", "可用数量"])
+        self.equipment_table.setSelectionBehavior(QtWidgets.QAbstractItemView.SelectionBehavior.SelectRows)
+        self.equipment_table.setEditTriggers(QtWidgets.QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.equipment_table.verticalHeader().setVisible(False)
+        self.equipment_table.horizontalHeader().setSectionResizeMode(
+            QtWidgets.QHeaderView.ResizeMode.Stretch
+        )
+        self.equipment_table.itemSelectionChanged.connect(self.on_equipment_select)
 
-        # Events (lost hours)
-        ttk.Label(right, text="事件（损失工时）").pack(anchor="w")
-        evf = ttk.Frame(right)
-        evf.pack(fill="x", pady=6)
+        equipment_layout.addWidget(self.equipment_table)
 
-        ttk.Label(evf, text="日期 (YYYY-MM-DD)").grid(row=0, column=0, sticky="w")
-        self.ev_date_var = tk.StringVar(value=datetime.now().date().isoformat())
-        ttk.Entry(evf, textvariable=self.ev_date_var, width=16).grid(row=0, column=1, padx=6)
+        eq_form = QtWidgets.QGridLayout()
+        self.equipment_id_edit = QtWidgets.QLineEdit()
+        self.equipment_total_spin = QtWidgets.QSpinBox()
+        self.equipment_total_spin.setRange(1, 9999)
+        self.equipment_available_spin = QtWidgets.QSpinBox()
+        self.equipment_available_spin.setRange(0, 9999)
 
-        ttk.Label(evf, text="损失工时").grid(row=1, column=0, sticky="w")
-        self.ev_hours_var = tk.StringVar(value="8")
-        ttk.Entry(evf, textvariable=self.ev_hours_var, width=16).grid(row=1, column=1, padx=6)
+        eq_form.addWidget(QtWidgets.QLabel("设备编号"), 0, 0)
+        eq_form.addWidget(self.equipment_id_edit, 0, 1)
+        eq_form.addWidget(QtWidgets.QLabel("总数量"), 0, 2)
+        eq_form.addWidget(self.equipment_total_spin, 0, 3)
+        eq_form.addWidget(QtWidgets.QLabel("可用数量"), 0, 4)
+        eq_form.addWidget(self.equipment_available_spin, 0, 5)
 
-        ttk.Label(evf, text="原因").grid(row=2, column=0, sticky="w")
-        self.ev_reason_var = tk.StringVar(value="员工请假")
-        ttk.Entry(evf, textvariable=self.ev_reason_var, width=16).grid(row=2, column=1, padx=6)
+        self.eq_add_btn = QtWidgets.QPushButton("添加/更新设备")
+        self.eq_add_btn.clicked.connect(self.add_or_update_equipment)
+        self.eq_remove_btn = QtWidgets.QPushButton("删除设备")
+        self.eq_remove_btn.clicked.connect(self.remove_equipment)
 
-        ttk.Button(evf, text="添加事件", command=self.add_event).grid(row=3, column=0, columnspan=2, pady=6, sticky="we")
+        eq_form.addWidget(self.eq_add_btn, 1, 4)
+        eq_form.addWidget(self.eq_remove_btn, 1, 5)
 
-        self.event_list = tk.Listbox(right, height=10, width=34)
-        self.event_list.pack(fill="x", pady=6)
-        ttk.Button(right, text="删除选中的事件", command=self.remove_event).pack(fill="x")
+        equipment_layout.addLayout(eq_form)
 
-        ttk.Separator(right).pack(fill="x", pady=10)
+        mid.addWidget(equipment_group, 2)
 
-        ttk.Label(right, text="预计交期").pack(anchor="w")
-        self.eta_var = tk.StringVar(value="(请先创建订单)")
-        ttk.Label(right, textvariable=self.eta_var, font=("Helvetica", 12, "bold")).pack(anchor="w", pady=6)
+        progress_group = QtWidgets.QGroupBox("进度与交期")
+        progress_layout = QtWidgets.QVBoxLayout(progress_group)
 
-        self.remaining_var = tk.StringVar(value="")
-        ttk.Label(right, textvariable=self.remaining_var).pack(anchor="w")
+        self.overall_progress = QtWidgets.QProgressBar()
+        self.overall_progress.setValue(0)
+        progress_layout.addWidget(QtWidgets.QLabel("订单总体进度"))
+        progress_layout.addWidget(self.overall_progress)
 
-        ttk.Label(right, text="说明").pack(anchor="w", pady=(10, 0))
-        self.explain_text = tk.Text(right, height=12, width=38)
-        self.explain_text.pack(fill="both", expand=True)
+        self.product_progress_table = QtWidgets.QTableWidget(0, 3)
+        self.product_progress_table.setHorizontalHeaderLabels(["产品", "零件号", "进度"])
+        self.product_progress_table.setEditTriggers(QtWidgets.QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.product_progress_table.verticalHeader().setVisible(False)
+        self.product_progress_table.horizontalHeader().setSectionResizeMode(
+            QtWidgets.QHeaderView.ResizeMode.Stretch
+        )
+        progress_layout.addWidget(self.product_progress_table)
 
-    def create_order(self):
-        oid = self.order_id_var.get().strip() or "O-UNKNOWN"
-        start = datetime.now()
+        self.eta_label = QtWidgets.QLabel("预计交期: -")
+        self.remaining_label = QtWidgets.QLabel("剩余工时: -")
+        progress_layout.addWidget(self.eta_label)
+        progress_layout.addWidget(self.remaining_label)
 
-        try:
-            n_ops = int(self.lathe_ops_var.get().strip())
-            if n_ops < 1:
-                raise ValueError
-        except ValueError:
-            messagebox.showerror("无效的数值", "车床工序数 N 必须是大于0的整数")
-            return
+        self.refresh_eta_btn = QtWidgets.QPushButton("刷新交期")
+        self.refresh_eta_btn.clicked.connect(self.refresh_eta)
+        progress_layout.addWidget(self.refresh_eta_btn)
 
-        try:
-            blank_days = int(self.blank_days_var.get().strip())
-            if blank_days < 0:
-                raise ValueError
-        except ValueError:
-            messagebox.showerror("无效的数值", "重采毛坯周期(天) 必须是非负整数")
-            return
+        mid.addWidget(progress_group, 3)
 
-        try:
-            quantity = int(self.quantity_var.get().strip())
-            if quantity < 1:
-                raise ValueError
-        except ValueError:
-            messagebox.showerror("无效的数值", "订单数量必须是大于0的整数")
-            return
+        return page
 
-        self.route_mode = self.route_var.get()
-        phases = template_with_mold(n_ops) if self.route_mode == "with_mold" else template_no_mold(n_ops)
+    # ------------------------
+    # Detail Page UI
+    # ------------------------
 
-        self.order = Order(
-            order_id=oid,
-            start_dt=start,
-            phases=phases,
-            events=[],
-            lathe_ops=n_ops,
-            blank_lead_days=blank_days,
-            quantity=quantity
+    def _build_detail_page(self) -> QtWidgets.QWidget:
+        page = QtWidgets.QWidget()
+        layout = QtWidgets.QVBoxLayout(page)
+
+        top_bar = QtWidgets.QHBoxLayout()
+        self.back_btn = QtWidgets.QPushButton("返回主界面")
+        self.back_btn.clicked.connect(self.go_to_dashboard)
+        self.order_summary_label = QtWidgets.QLabel("订单: -")
+        self.detail_eta_label = QtWidgets.QLabel("预计交期: -")
+        self.detail_progress_label = QtWidgets.QLabel("总体进度: 0%")
+
+        top_bar.addWidget(self.back_btn)
+        top_bar.addWidget(self.order_summary_label)
+        top_bar.addStretch(1)
+        top_bar.addWidget(self.detail_progress_label)
+        top_bar.addWidget(self.detail_eta_label)
+
+        layout.addLayout(top_bar)
+
+        splitter = QtWidgets.QSplitter()
+        layout.addWidget(splitter, 1)
+
+        # Left panel: Products + Employees
+        left_panel = QtWidgets.QWidget()
+        left_layout = QtWidgets.QVBoxLayout(left_panel)
+
+        products_group = QtWidgets.QGroupBox("产品列表")
+        products_layout = QtWidgets.QVBoxLayout(products_group)
+
+        self.products_table = QtWidgets.QTableWidget(0, 4)
+        self.products_table.setHorizontalHeaderLabels(["产品", "零件号", "数量", "进度"])
+        self.products_table.setSelectionBehavior(QtWidgets.QAbstractItemView.SelectionBehavior.SelectRows)
+        self.products_table.setEditTriggers(QtWidgets.QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.products_table.verticalHeader().setVisible(False)
+        self.products_table.horizontalHeader().setSectionResizeMode(
+            QtWidgets.QHeaderView.ResizeMode.Stretch
+        )
+        self.products_table.itemSelectionChanged.connect(self.on_product_select)
+
+        products_layout.addWidget(self.products_table)
+
+        prod_form = QtWidgets.QGridLayout()
+        self.product_id_edit = QtWidgets.QLineEdit()
+        self.product_id_edit.setMinimumWidth(220)
+        self.product_id_edit.setSizePolicy(
+            QtWidgets.QSizePolicy.Policy.Expanding,
+            QtWidgets.QSizePolicy.Policy.Fixed,
+        )
+        self.product_part_edit = QtWidgets.QLineEdit()
+        self.product_qty_spin = QtWidgets.QSpinBox()
+        self.product_qty_spin.setRange(1, 999999)
+
+        prod_form.setColumnStretch(1, 2)
+        prod_form.addWidget(QtWidgets.QLabel("产品名"), 0, 0)
+        prod_form.addWidget(self.product_id_edit, 0, 1)
+        prod_form.addWidget(QtWidgets.QLabel("零件号"), 0, 2)
+        prod_form.addWidget(self.product_part_edit, 0, 3)
+        prod_form.addWidget(QtWidgets.QLabel("数量"), 0, 4)
+        prod_form.addWidget(self.product_qty_spin, 0, 5)
+
+        self.product_add_btn = QtWidgets.QPushButton("添加/更新产品")
+        self.product_add_btn.clicked.connect(self.add_or_update_product)
+        self.product_remove_btn = QtWidgets.QPushButton("删除产品")
+        self.product_remove_btn.clicked.connect(self.remove_product)
+
+        prod_form.addWidget(self.product_add_btn, 1, 4)
+        prod_form.addWidget(self.product_remove_btn, 1, 5)
+
+        products_layout.addLayout(prod_form)
+        left_layout.addWidget(products_group)
+
+        employees_group = QtWidgets.QGroupBox("员工列表")
+        employees_layout = QtWidgets.QVBoxLayout(employees_group)
+
+        self.employee_list = QtWidgets.QListWidget()
+        employees_layout.addWidget(self.employee_list)
+
+        emp_form = QtWidgets.QHBoxLayout()
+        self.employee_name_edit = QtWidgets.QLineEdit()
+        self.employee_name_edit.setPlaceholderText("员工姓名")
+        self.employee_add_btn = QtWidgets.QPushButton("添加")
+        self.employee_add_btn.clicked.connect(self.add_employee)
+        self.employee_remove_btn = QtWidgets.QPushButton("删除")
+        self.employee_remove_btn.clicked.connect(self.remove_employee)
+
+        emp_form.addWidget(self.employee_name_edit)
+        emp_form.addWidget(self.employee_add_btn)
+        emp_form.addWidget(self.employee_remove_btn)
+
+        employees_layout.addLayout(emp_form)
+        left_layout.addWidget(employees_group)
+
+        splitter.addWidget(left_panel)
+
+        # Right panel: Phases + Events
+        right_panel = QtWidgets.QWidget()
+        right_layout = QtWidgets.QVBoxLayout(right_panel)
+
+        phases_group = QtWidgets.QGroupBox("工序设置")
+        phases_layout = QtWidgets.QVBoxLayout(phases_group)
+
+        self.phases_table = QtWidgets.QTableWidget(0, 6)
+        self.phases_table.setHorizontalHeaderLabels(
+            ["工序名称", "工时", "设备", "员工", "并行组", "完成"]
+        )
+        self.phases_table.setSelectionBehavior(QtWidgets.QAbstractItemView.SelectionBehavior.SelectRows)
+        self.phases_table.setEditTriggers(QtWidgets.QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.phases_table.verticalHeader().setVisible(False)
+        self.phases_table.horizontalHeader().setSectionResizeMode(
+            QtWidgets.QHeaderView.ResizeMode.Stretch
+        )
+        self.phases_table.itemSelectionChanged.connect(self.on_phase_select)
+
+        phases_layout.addWidget(self.phases_table)
+
+        phase_form = QtWidgets.QGridLayout()
+        self.phase_name_edit = QtWidgets.QLineEdit()
+        self.phase_hours_spin = QtWidgets.QDoubleSpinBox()
+        self.phase_hours_spin.setRange(0, 99999)
+        self.phase_hours_spin.setDecimals(2)
+        self.phase_equipment_combo = QtWidgets.QComboBox()
+        self.phase_equipment_combo.setEditable(True)
+        self.phase_employee_combo = QtWidgets.QComboBox()
+        self.phase_employee_combo.setEditable(True)
+        self.phase_parallel_spin = QtWidgets.QSpinBox()
+        self.phase_parallel_spin.setRange(0, 9999)
+        self.phase_done_check = QtWidgets.QCheckBox("已完成")
+
+        phase_form.addWidget(QtWidgets.QLabel("名称"), 0, 0)
+        phase_form.addWidget(self.phase_name_edit, 0, 1)
+        phase_form.addWidget(QtWidgets.QLabel("工时"), 0, 2)
+        phase_form.addWidget(self.phase_hours_spin, 0, 3)
+        phase_form.addWidget(QtWidgets.QLabel("设备"), 0, 4)
+        phase_form.addWidget(self.phase_equipment_combo, 0, 5)
+
+        phase_form.addWidget(QtWidgets.QLabel("员工"), 1, 0)
+        phase_form.addWidget(self.phase_employee_combo, 1, 1)
+        phase_form.addWidget(QtWidgets.QLabel("并行组"), 1, 2)
+        phase_form.addWidget(self.phase_parallel_spin, 1, 3)
+        phase_form.addWidget(self.phase_done_check, 1, 4)
+
+        self.phase_add_btn = QtWidgets.QPushButton("添加/更新工序")
+        self.phase_add_btn.clicked.connect(self.add_or_update_phase)
+        self.phase_remove_btn = QtWidgets.QPushButton("删除工序")
+        self.phase_remove_btn.clicked.connect(self.remove_phase)
+        self.phase_toggle_btn = QtWidgets.QPushButton("切换完成状态")
+        self.phase_toggle_btn.clicked.connect(self.toggle_phase_done)
+        self.phase_parallel_btn = QtWidgets.QPushButton("设为并行组")
+        self.phase_parallel_btn.clicked.connect(self.set_parallel_group)
+        self.phase_parallel_clear_btn = QtWidgets.QPushButton("取消并行")
+        self.phase_parallel_clear_btn.clicked.connect(self.clear_parallel_group)
+
+        phase_form.addWidget(self.phase_add_btn, 2, 4)
+        phase_form.addWidget(self.phase_remove_btn, 2, 5)
+        phase_form.addWidget(self.phase_toggle_btn, 2, 6)
+        phase_form.addWidget(self.phase_parallel_btn, 3, 4)
+        phase_form.addWidget(self.phase_parallel_clear_btn, 3, 5)
+
+        phases_layout.addLayout(phase_form)
+        right_layout.addWidget(phases_group)
+
+        events_group = QtWidgets.QGroupBox("事件(损失工时)")
+        events_layout = QtWidgets.QVBoxLayout(events_group)
+
+        self.events_table = QtWidgets.QTableWidget(0, 3)
+        self.events_table.setHorizontalHeaderLabels(["日期", "损失工时", "原因"])
+        self.events_table.setSelectionBehavior(QtWidgets.QAbstractItemView.SelectionBehavior.SelectRows)
+        self.events_table.setEditTriggers(QtWidgets.QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.events_table.verticalHeader().setVisible(False)
+        self.events_table.horizontalHeader().setSectionResizeMode(
+            QtWidgets.QHeaderView.ResizeMode.Stretch
         )
 
-        self._reload_phase_tree()
-        self._reload_event_list()
-        self.refresh_eta()
-        self._explain(f"已创建订单 {oid}。数量={quantity}, 工艺路线={self.route_mode}, 车床工序数={n_ops}, 重采毛坯周期={blank_days}天。")
+        events_layout.addWidget(self.events_table)
 
-    def _reload_phase_tree(self):
-        for row in self.phase_tree.get_children():
-            self.phase_tree.delete(row)
-        if not self.order:
+        ev_form = QtWidgets.QGridLayout()
+        self.event_date_edit = QtWidgets.QDateEdit()
+        self.event_date_edit.setDate(QtCore.QDate.currentDate())
+        self._setup_date_edit(self.event_date_edit)
+        self.event_hours_spin = QtWidgets.QDoubleSpinBox()
+        self.event_hours_spin.setRange(0, 24)
+        self.event_hours_spin.setDecimals(2)
+        self.event_hours_spin.setValue(8.0)
+        self.event_reason_combo = QtWidgets.QComboBox()
+        self.event_reason_combo.setEditable(True)
+        self.event_reason_combo.addItems(self.event_reasons)
+
+        ev_form.addWidget(QtWidgets.QLabel("日期"), 0, 0)
+        ev_form.addWidget(self.event_date_edit, 0, 1)
+        ev_form.addWidget(QtWidgets.QLabel("工时"), 0, 2)
+        ev_form.addWidget(self.event_hours_spin, 0, 3)
+        ev_form.addWidget(QtWidgets.QLabel("原因"), 0, 4)
+        ev_form.addWidget(self.event_reason_combo, 0, 5)
+
+        self.event_add_btn = QtWidgets.QPushButton("添加事件")
+        self.event_add_btn.clicked.connect(self.add_event)
+        self.event_remove_btn = QtWidgets.QPushButton("删除事件")
+        self.event_remove_btn.clicked.connect(self.remove_event)
+
+        ev_form.addWidget(self.event_add_btn, 1, 4)
+        ev_form.addWidget(self.event_remove_btn, 1, 5)
+
+        events_layout.addLayout(ev_form)
+        right_layout.addWidget(events_group)
+
+        splitter.addWidget(right_panel)
+
+        splitter.setSizes([320, 960])
+
+        return page
+
+    def _build_admin_page(self) -> QtWidgets.QWidget:
+        page = QtWidgets.QWidget()
+        layout = QtWidgets.QVBoxLayout(page)
+
+        top_bar = QtWidgets.QHBoxLayout()
+        self.admin_back_btn = QtWidgets.QPushButton("返回主界面")
+        self.admin_back_btn.clicked.connect(self.go_to_dashboard)
+        self.admin_title_label = QtWidgets.QLabel("管理员界面")
+
+        top_bar.addWidget(self.admin_back_btn)
+        top_bar.addWidget(self.admin_title_label)
+        top_bar.addStretch(1)
+        layout.addLayout(top_bar)
+
+        self.admin_tabs = QtWidgets.QTabWidget()
+        self.admin_tabs.addTab(self._build_admin_events_tab(), "事件管理")
+        self.admin_tabs.addTab(self._build_admin_reasons_tab(), "事件原因")
+        self.admin_tabs.addTab(self._build_admin_equipment_templates_tab(), "设备模板")
+        self.admin_tabs.addTab(self._build_admin_phase_templates_tab(), "工序模板")
+        self.admin_tabs.addTab(self._build_admin_employee_templates_tab(), "员工模板")
+        self.admin_tabs.addTab(self._build_admin_shift_templates_tab(), "班次模板")
+
+        layout.addWidget(self.admin_tabs)
+        return page
+
+    def _build_admin_events_tab(self) -> QtWidgets.QWidget:
+        page = QtWidgets.QWidget()
+        layout = QtWidgets.QVBoxLayout(page)
+
+        self.admin_events_table = QtWidgets.QTableWidget(0, 3)
+        self.admin_events_table.setHorizontalHeaderLabels(["日期", "损失工时", "原因"])
+        self.admin_events_table.setSelectionBehavior(QtWidgets.QAbstractItemView.SelectionBehavior.SelectRows)
+        self.admin_events_table.setEditTriggers(QtWidgets.QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.admin_events_table.verticalHeader().setVisible(False)
+        self.admin_events_table.horizontalHeader().setSectionResizeMode(
+            QtWidgets.QHeaderView.ResizeMode.Stretch
+        )
+        self.admin_events_table.itemSelectionChanged.connect(self.on_admin_event_select)
+        layout.addWidget(self.admin_events_table)
+
+        form = QtWidgets.QGridLayout()
+        self.admin_event_date_edit = QtWidgets.QDateEdit()
+        self.admin_event_date_edit.setDate(QtCore.QDate.currentDate())
+        self._setup_date_edit(self.admin_event_date_edit)
+        self.admin_event_hours_spin = QtWidgets.QDoubleSpinBox()
+        self.admin_event_hours_spin.setRange(0, 24)
+        self.admin_event_hours_spin.setDecimals(2)
+        self.admin_event_hours_spin.setValue(8.0)
+        self.admin_event_reason_combo = QtWidgets.QComboBox()
+        self.admin_event_reason_combo.setEditable(True)
+        self.admin_event_reason_combo.addItems(self.event_reasons)
+
+        form.addWidget(QtWidgets.QLabel("日期"), 0, 0)
+        form.addWidget(self.admin_event_date_edit, 0, 1)
+        form.addWidget(QtWidgets.QLabel("工时"), 0, 2)
+        form.addWidget(self.admin_event_hours_spin, 0, 3)
+        form.addWidget(QtWidgets.QLabel("原因"), 0, 4)
+        form.addWidget(self.admin_event_reason_combo, 0, 5)
+
+        self.admin_event_add_btn = QtWidgets.QPushButton("新增事件")
+        self.admin_event_add_btn.clicked.connect(self.admin_add_event)
+        self.admin_event_update_btn = QtWidgets.QPushButton("更新事件")
+        self.admin_event_update_btn.clicked.connect(self.admin_update_event)
+        self.admin_event_remove_btn = QtWidgets.QPushButton("删除事件")
+        self.admin_event_remove_btn.clicked.connect(self.admin_remove_event)
+
+        form.addWidget(self.admin_event_add_btn, 1, 3)
+        form.addWidget(self.admin_event_update_btn, 1, 4)
+        form.addWidget(self.admin_event_remove_btn, 1, 5)
+
+        layout.addLayout(form)
+        return page
+
+    def _build_admin_reasons_tab(self) -> QtWidgets.QWidget:
+        page = QtWidgets.QWidget()
+        layout = QtWidgets.QVBoxLayout(page)
+
+        self.admin_reason_list = QtWidgets.QListWidget()
+        self.admin_reason_list.itemSelectionChanged.connect(self.on_admin_reason_select)
+        layout.addWidget(self.admin_reason_list)
+
+        form = QtWidgets.QHBoxLayout()
+        self.admin_reason_edit = QtWidgets.QLineEdit()
+        self.admin_reason_edit.setPlaceholderText("事件原因")
+        self.admin_reason_add_btn = QtWidgets.QPushButton("添加")
+        self.admin_reason_add_btn.clicked.connect(self.admin_add_reason)
+        self.admin_reason_update_btn = QtWidgets.QPushButton("更新选中")
+        self.admin_reason_update_btn.clicked.connect(self.admin_update_reason)
+        self.admin_reason_remove_btn = QtWidgets.QPushButton("删除选中")
+        self.admin_reason_remove_btn.clicked.connect(self.admin_remove_reason)
+
+        form.addWidget(self.admin_reason_edit)
+        form.addWidget(self.admin_reason_add_btn)
+        form.addWidget(self.admin_reason_update_btn)
+        form.addWidget(self.admin_reason_remove_btn)
+
+        layout.addLayout(form)
+        return page
+
+    def _build_admin_equipment_templates_tab(self) -> QtWidgets.QWidget:
+        page = QtWidgets.QWidget()
+        layout = QtWidgets.QVBoxLayout(page)
+
+        self.admin_equipment_template_table = QtWidgets.QTableWidget(0, 3)
+        self.admin_equipment_template_table.setHorizontalHeaderLabels(["设备编号", "总数量", "可用数量"])
+        self.admin_equipment_template_table.setSelectionBehavior(
+            QtWidgets.QAbstractItemView.SelectionBehavior.SelectRows
+        )
+        self.admin_equipment_template_table.setEditTriggers(
+            QtWidgets.QAbstractItemView.EditTrigger.NoEditTriggers
+        )
+        self.admin_equipment_template_table.verticalHeader().setVisible(False)
+        self.admin_equipment_template_table.horizontalHeader().setSectionResizeMode(
+            QtWidgets.QHeaderView.ResizeMode.Stretch
+        )
+        self.admin_equipment_template_table.itemSelectionChanged.connect(
+            self.on_admin_equipment_template_select
+        )
+        layout.addWidget(self.admin_equipment_template_table)
+
+        form = QtWidgets.QGridLayout()
+        self.admin_equipment_id_edit = QtWidgets.QLineEdit()
+        self.admin_equipment_total_spin = QtWidgets.QSpinBox()
+        self.admin_equipment_total_spin.setRange(1, 9999)
+        self.admin_equipment_available_spin = QtWidgets.QSpinBox()
+        self.admin_equipment_available_spin.setRange(0, 9999)
+
+        form.addWidget(QtWidgets.QLabel("设备编号"), 0, 0)
+        form.addWidget(self.admin_equipment_id_edit, 0, 1)
+        form.addWidget(QtWidgets.QLabel("总数量"), 0, 2)
+        form.addWidget(self.admin_equipment_total_spin, 0, 3)
+        form.addWidget(QtWidgets.QLabel("可用数量"), 0, 4)
+        form.addWidget(self.admin_equipment_available_spin, 0, 5)
+
+        self.admin_equipment_add_btn = QtWidgets.QPushButton("添加/更新模板")
+        self.admin_equipment_add_btn.clicked.connect(self.admin_add_or_update_equipment_template)
+        self.admin_equipment_remove_btn = QtWidgets.QPushButton("删除模板")
+        self.admin_equipment_remove_btn.clicked.connect(self.admin_remove_equipment_template)
+        self.admin_equipment_apply_btn = QtWidgets.QPushButton("应用到当前订单")
+        self.admin_equipment_apply_btn.clicked.connect(self.admin_apply_equipment_template)
+
+        form.addWidget(self.admin_equipment_add_btn, 1, 3)
+        form.addWidget(self.admin_equipment_remove_btn, 1, 4)
+        form.addWidget(self.admin_equipment_apply_btn, 1, 5)
+
+        layout.addLayout(form)
+        return page
+
+    def _build_admin_phase_templates_tab(self) -> QtWidgets.QWidget:
+        page = QtWidgets.QWidget()
+        layout = QtWidgets.QVBoxLayout(page)
+
+        apply_row = QtWidgets.QHBoxLayout()
+        self.admin_phase_product_combo = QtWidgets.QComboBox()
+        self.admin_phase_apply_btn = QtWidgets.QPushButton("应用到产品")
+        self.admin_phase_apply_btn.clicked.connect(self.admin_apply_phase_template)
+        apply_row.addWidget(QtWidgets.QLabel("应用到产品"))
+        apply_row.addWidget(self.admin_phase_product_combo)
+        apply_row.addStretch(1)
+        apply_row.addWidget(self.admin_phase_apply_btn)
+        layout.addLayout(apply_row)
+
+        self.admin_phase_template_table = QtWidgets.QTableWidget(0, 5)
+        self.admin_phase_template_table.setHorizontalHeaderLabels(
+            ["工序名称", "工时", "设备", "员工", "并行组"]
+        )
+        self.admin_phase_template_table.setSelectionBehavior(
+            QtWidgets.QAbstractItemView.SelectionBehavior.SelectRows
+        )
+        self.admin_phase_template_table.setEditTriggers(
+            QtWidgets.QAbstractItemView.EditTrigger.NoEditTriggers
+        )
+        self.admin_phase_template_table.verticalHeader().setVisible(False)
+        self.admin_phase_template_table.horizontalHeader().setSectionResizeMode(
+            QtWidgets.QHeaderView.ResizeMode.Stretch
+        )
+        self.admin_phase_template_table.itemSelectionChanged.connect(
+            self.on_admin_phase_template_select
+        )
+        layout.addWidget(self.admin_phase_template_table)
+
+        form = QtWidgets.QGridLayout()
+        self.admin_phase_name_edit = QtWidgets.QLineEdit()
+        self.admin_phase_hours_spin = QtWidgets.QDoubleSpinBox()
+        self.admin_phase_hours_spin.setRange(0, 99999)
+        self.admin_phase_hours_spin.setDecimals(2)
+        self.admin_phase_equipment_combo = QtWidgets.QComboBox()
+        self.admin_phase_equipment_combo.setEditable(True)
+        self.admin_phase_employee_combo = QtWidgets.QComboBox()
+        self.admin_phase_employee_combo.setEditable(True)
+        self.admin_phase_parallel_spin = QtWidgets.QSpinBox()
+        self.admin_phase_parallel_spin.setRange(0, 9999)
+
+        form.addWidget(QtWidgets.QLabel("名称"), 0, 0)
+        form.addWidget(self.admin_phase_name_edit, 0, 1)
+        form.addWidget(QtWidgets.QLabel("工时"), 0, 2)
+        form.addWidget(self.admin_phase_hours_spin, 0, 3)
+        form.addWidget(QtWidgets.QLabel("设备"), 0, 4)
+        form.addWidget(self.admin_phase_equipment_combo, 0, 5)
+
+        form.addWidget(QtWidgets.QLabel("员工"), 1, 0)
+        form.addWidget(self.admin_phase_employee_combo, 1, 1)
+        form.addWidget(QtWidgets.QLabel("并行组"), 1, 2)
+        form.addWidget(self.admin_phase_parallel_spin, 1, 3)
+
+        self.admin_phase_add_btn = QtWidgets.QPushButton("添加/更新模板")
+        self.admin_phase_add_btn.clicked.connect(self.admin_add_or_update_phase_template)
+        self.admin_phase_remove_btn = QtWidgets.QPushButton("删除模板")
+        self.admin_phase_remove_btn.clicked.connect(self.admin_remove_phase_template)
+
+        form.addWidget(self.admin_phase_add_btn, 2, 3)
+        form.addWidget(self.admin_phase_remove_btn, 2, 4)
+
+        layout.addLayout(form)
+        return page
+
+    def _build_admin_employee_templates_tab(self) -> QtWidgets.QWidget:
+        page = QtWidgets.QWidget()
+        layout = QtWidgets.QVBoxLayout(page)
+
+        self.admin_employee_template_list = QtWidgets.QListWidget()
+        self.admin_employee_template_list.itemSelectionChanged.connect(
+            self.on_admin_employee_template_select
+        )
+        layout.addWidget(self.admin_employee_template_list)
+
+        form = QtWidgets.QHBoxLayout()
+        self.admin_employee_name_edit = QtWidgets.QLineEdit()
+        self.admin_employee_name_edit.setPlaceholderText("员工姓名")
+        self.admin_employee_add_btn = QtWidgets.QPushButton("添加/更新模板")
+        self.admin_employee_add_btn.clicked.connect(self.admin_add_or_update_employee_template)
+        self.admin_employee_remove_btn = QtWidgets.QPushButton("删除模板")
+        self.admin_employee_remove_btn.clicked.connect(self.admin_remove_employee_template)
+        self.admin_employee_apply_btn = QtWidgets.QPushButton("应用到当前订单")
+        self.admin_employee_apply_btn.clicked.connect(self.admin_apply_employee_template)
+
+        form.addWidget(self.admin_employee_name_edit)
+        form.addWidget(self.admin_employee_add_btn)
+        form.addWidget(self.admin_employee_remove_btn)
+        form.addWidget(self.admin_employee_apply_btn)
+
+        layout.addLayout(form)
+        return page
+
+    def _build_admin_shift_templates_tab(self) -> QtWidgets.QWidget:
+        page = QtWidgets.QWidget()
+        layout = QtWidgets.QHBoxLayout(page)
+
+        left_panel = QtWidgets.QWidget()
+        left_layout = QtWidgets.QVBoxLayout(left_panel)
+
+        self.admin_shift_template_list = QtWidgets.QListWidget()
+        self.admin_shift_template_list.itemSelectionChanged.connect(self.on_admin_shift_template_select)
+        left_layout.addWidget(self.admin_shift_template_list)
+
+        name_row = QtWidgets.QHBoxLayout()
+        self.admin_shift_name_edit = QtWidgets.QLineEdit()
+        self.admin_shift_name_edit.setPlaceholderText("班次模板名称")
+        name_row.addWidget(self.admin_shift_name_edit)
+        left_layout.addLayout(name_row)
+
+        button_row = QtWidgets.QHBoxLayout()
+        self.admin_shift_save_btn = QtWidgets.QPushButton("添加/更新模板")
+        self.admin_shift_save_btn.clicked.connect(self.admin_add_or_update_shift_template)
+        self.admin_shift_delete_btn = QtWidgets.QPushButton("删除模板")
+        self.admin_shift_delete_btn.clicked.connect(self.admin_remove_shift_template)
+        self.admin_shift_activate_btn = QtWidgets.QPushButton("设为当前班次")
+        self.admin_shift_activate_btn.clicked.connect(self.admin_set_active_shift_template)
+        button_row.addWidget(self.admin_shift_save_btn)
+        button_row.addWidget(self.admin_shift_delete_btn)
+        button_row.addWidget(self.admin_shift_activate_btn)
+        left_layout.addLayout(button_row)
+
+        layout.addWidget(left_panel, 1)
+
+        right_panel = QtWidgets.QWidget()
+        right_layout = QtWidgets.QVBoxLayout(right_panel)
+
+        self.admin_shift_active_label = QtWidgets.QLabel("当前班次: -")
+        right_layout.addWidget(self.admin_shift_active_label)
+
+        self.admin_shift_table = QtWidgets.QTableWidget(7, 4)
+        self.admin_shift_table.setHorizontalHeaderLabels(["星期", "班次数", "每班小时", "当日总工时"])
+        self.admin_shift_table.verticalHeader().setVisible(False)
+        self.admin_shift_table.setEditTriggers(QtWidgets.QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.admin_shift_table.horizontalHeader().setSectionResizeMode(
+            QtWidgets.QHeaderView.ResizeMode.Stretch
+        )
+        right_layout.addWidget(self.admin_shift_table)
+
+        self.shift_count_spins: List[QtWidgets.QSpinBox] = []
+        self.shift_hours_spins: List[QtWidgets.QDoubleSpinBox] = []
+        days = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"]
+        for row, day in enumerate(days):
+            day_item = QtWidgets.QTableWidgetItem(day)
+            day_item.setFlags(QtCore.Qt.ItemFlag.ItemIsEnabled)
+            self.admin_shift_table.setItem(row, 0, day_item)
+
+            count_spin = QtWidgets.QSpinBox()
+            count_spin.setRange(0, 10)
+            hours_spin = QtWidgets.QDoubleSpinBox()
+            hours_spin.setRange(0, 24)
+            hours_spin.setDecimals(1)
+            hours_spin.setSingleStep(0.5)
+
+            count_spin.valueChanged.connect(lambda _, r=row: self._update_shift_row_total(r))
+            hours_spin.valueChanged.connect(lambda _, r=row: self._update_shift_row_total(r))
+
+            self.admin_shift_table.setCellWidget(row, 1, count_spin)
+            self.admin_shift_table.setCellWidget(row, 2, hours_spin)
+            total_item = QtWidgets.QTableWidgetItem("0")
+            total_item.setFlags(QtCore.Qt.ItemFlag.ItemIsEnabled)
+            self.admin_shift_table.setItem(row, 3, total_item)
+
+            self.shift_count_spins.append(count_spin)
+            self.shift_hours_spins.append(hours_spin)
+
+        layout.addWidget(right_panel, 2)
+        return page
+
+    # ------------------------
+    # Order lifecycle
+    # ------------------------
+
+    def create_order(self) -> None:
+        order_id = self.order_id_edit.text().strip() or "O-UNKNOWN"
+        start_dt = datetime.combine(_qdate_to_date(self.start_date_edit.date()), datetime.min.time())
+        self.autosave_path = None
+        if not self._ensure_autosave_path(f"{order_id}.json"):
+            QtWidgets.QMessageBox.information(self, "提示", "需要选择保存位置以启用自动保存。")
             return
-        for idx, p in enumerate(self.order.phases):
-            # 并行显示：使用符号 ⏸️ 表示并行组
-            if p.parallel_group > 0:
-                parallel_display = f"⏸️组{p.parallel_group}"
-            else:
-                parallel_display = "→顺序"
-            self.phase_tree.insert(
-                "", "end", iid=str(idx),
-                values=(p.name, f"{p.planned_hours:g}", parallel_display, "是" if p.done else "否")
+        self.order = Order(
+            order_id=order_id,
+            start_dt=start_dt,
+            products=[],
+            events=[],
+            equipment=list(self.equipment),
+            employees=list(self.employees),
+        )
+        self._refresh_all()
+        self._auto_save()
+        self.go_to_detail()
+
+    def save_order(self) -> None:
+        if not self.order:
+            QtWidgets.QMessageBox.warning(self, "无订单", "请先创建或加载订单。")
+            return
+        default_name = f"{self.order.order_id}.json"
+        filename, _ = QtWidgets.QFileDialog.getSaveFileName(
+            self, "保存订单", default_name, "JSON Files (*.json)"
+        )
+        if not filename:
+            return
+        if not filename.endswith(".json"):
+            filename += ".json"
+        self._set_autosave_path(filename)
+        self._save_to_path(filename, show_message=True)
+
+    def load_order(self) -> None:
+        filename, _ = QtWidgets.QFileDialog.getOpenFileName(
+            self, "加载订单", "", "JSON Files (*.json)"
+        )
+        if not filename:
+            return
+        try:
+            with open(filename, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            self.order = self._order_from_dict(data)
+        except Exception as exc:
+            QtWidgets.QMessageBox.critical(self, "加载失败", f"无法加载订单: {exc}")
+            return
+
+        self.order_id_edit.setText(self.order.order_id)
+        self.start_date_edit.setDate(_date_to_qdate(self.order.start_dt.date()))
+
+        self.equipment = list(self.order.equipment)
+        self.employees = list(self.order.employees)
+        self._maybe_import_templates_from_order(data)
+        self._set_autosave_path(filename)
+
+        self._refresh_all()
+        self.go_to_detail()
+
+    def go_to_detail(self) -> None:
+        if not self.order:
+            QtWidgets.QMessageBox.information(self, "提示", "请先创建或加载订单。")
+            return
+        self.stack.setCurrentWidget(self.detail_page)
+
+    def open_admin_login(self) -> None:
+        password, ok = QtWidgets.QInputDialog.getText(
+            self, "管理员登录", "请输入管理员密码", QtWidgets.QLineEdit.EchoMode.Password
+        )
+        if not ok:
+            return
+        if password != self.admin_password:
+            QtWidgets.QMessageBox.warning(self, "验证失败", "管理员密码不正确。")
+            return
+        self._refresh_admin_views()
+        self.stack.setCurrentWidget(self.admin_page)
+
+    def go_to_dashboard(self) -> None:
+        self.stack.setCurrentWidget(self.dashboard)
+
+    def _ensure_autosave_path(self, default_name: str) -> bool:
+        if not default_name:
+            return False
+        filename = default_name
+        if os.path.exists(filename):
+            filename, _ = QtWidgets.QFileDialog.getSaveFileName(
+                self, "保存订单", default_name, "JSON Files (*.json)"
             )
+            if not filename:
+                return False
+        if not filename.endswith(".json"):
+            filename += ".json"
+        self._set_autosave_path(filename)
+        return True
 
-    def _reload_event_list(self):
-        self.event_list.delete(0, tk.END)
+    def _set_autosave_path(self, filename: str) -> None:
+        self.autosave_path = filename
+        self.statusBar().showMessage(f"自动保存文件: {filename}", 5000)
+
+    def _save_to_path(self, filename: str, show_message: bool = False, autosave: bool = False) -> None:
         if not self.order:
             return
-        for i, ev in enumerate(self.order.events):
-            self.event_list.insert(tk.END, f"{i}. {ev.day.isoformat()}  -{ev.hours_lost:g}h  {ev.reason}")
+        data = self._order_to_dict(self.order)
+        with open(filename, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+        if show_message:
+            QtWidgets.QMessageBox.information(self, "保存成功", f"订单已保存到 {filename}")
+        if autosave:
+            timestamp = datetime.now().strftime("%H:%M:%S")
+            self.statusBar().showMessage(f"自动保存: {os.path.basename(filename)} {timestamp}", 3000)
 
-    def _get_selected_phase_index(self) -> Optional[int]:
-        sel = self.phase_tree.selection()
-        if not sel:
-            return None
-        return int(sel[0])
-
-    def _on_phase_select(self, event):
-        """当选中工序时，自动填充到编辑框（仅单选时）"""
-        sel = self.phase_tree.selection()
-        if len(sel) == 1 and self.order:
-            idx = int(sel[0])
-            if idx < len(self.order.phases):
-                phase = self.order.phases[idx]
-                self.phase_name_var.set(phase.name)
-                self.phase_hours_var.set(str(phase.planned_hours))
-
-    def update_phase_hours(self):
-        if not self.order:
-            messagebox.showwarning("无订单", "请先创建订单。")
-            return
-        idx = self._get_selected_phase_index()
-        if idx is None:
-            messagebox.showwarning("未选择", "请先选择一个工序。")
+    def _auto_save(self) -> None:
+        if not self.order or not self.autosave_path:
             return
         try:
-            h = float(self.phase_hours_var.get())
-            if h < 0:
-                raise ValueError
-        except ValueError:
-            messagebox.showerror("无效的工时", "计划工时必须是非负数。")
-            return
-        self.order.phases[idx].planned_hours = h
-        self._reload_phase_tree()
-        self.refresh_eta()
+            self._save_to_path(self.autosave_path, autosave=True)
+        except Exception as exc:
+            self.statusBar().showMessage(f"自动保存失败: {exc}", 5000)
 
-    def update_phase_name(self):
-        if not self.order:
-            messagebox.showwarning("无订单", "请先创建订单。")
-            return
-        idx = self._get_selected_phase_index()
-        if idx is None:
-            messagebox.showwarning("未选择", "请先选择一个工序。")
-            return
-        name = self.phase_name_var.get().strip()
-        if not name:
-            messagebox.showerror("无效的名称", "工序名称不能为空。")
-            return
-        self.order.phases[idx].name = name
-        self._reload_phase_tree()
-        self.refresh_eta()
-
-    def set_parallel_group(self):
-        """将选中的多个工序设置为同一并行组"""
-        if not self.order:
-            messagebox.showwarning("无订单", "请先创建订单。")
-            return
-        
-        sel = self.phase_tree.selection()
-        if len(sel) < 2:
-            messagebox.showinfo("提示", "请先按住Ctrl键选中至少2个工序，然后点击此按钮将它们设为并行。")
-            return
-        
-        # 找到当前最大的并行组编号
-        max_group = max((p.parallel_group for p in self.order.phases), default=0)
-        new_group = max_group + 1
-        
-        # 将选中的工序设为新的并行组
-        phase_names = []
-        for iid in sel:
-            idx = int(iid)
-            if idx < len(self.order.phases):
-                self.order.phases[idx].parallel_group = new_group
-                phase_names.append(self.order.phases[idx].name)
-        
-        self._reload_phase_tree()
-        self.refresh_eta()
-        self._explain(f"已将 {len(sel)} 个工序设为并行组{new_group}: {', '.join(phase_names)}")
-        messagebox.showinfo("成功", f"已将以下工序设为并行组{new_group}（可同时进行）:\n\n" + "\n".join(phase_names))
-    
-    def clear_parallel(self):
-        """将选中的工序改为顺序执行"""
-        if not self.order:
-            messagebox.showwarning("无订单", "请先创建订单。")
-            return
-        
-        sel = self.phase_tree.selection()
-        if not sel:
-            messagebox.showwarning("未选择", "请先选择要改为顺序执行的工序。")
-            return
-        
-        phase_names = []
-        for iid in sel:
-            idx = int(iid)
-            if idx < len(self.order.phases):
-                self.order.phases[idx].parallel_group = 0
-                phase_names.append(self.order.phases[idx].name)
-        
-        self._reload_phase_tree()
-        self.refresh_eta()
-        self._explain(f"已将 {len(sel)} 个工序改为顺序执行: {', '.join(phase_names)}")
-
-    def add_phase(self):
-        if not self.order:
-            messagebox.showwarning("无订单", "请先创建订单。")
-            return
-        name = self.phase_name_var.get().strip()
-        if not name:
-            messagebox.showerror("无效的名称", "工序名称不能为空。")
+    def _load_app_templates(self) -> None:
+        if not os.path.exists(self.app_template_path):
             return
         try:
-            hours = float(self.phase_hours_var.get())
-            if hours < 0:
-                raise ValueError
-        except ValueError:
-            messagebox.showerror("无效的工时", "计划工时必须是非负数。")
-            return
-        
-        # 在选中的工序后面插入，如果没有选中则添加到最后
-        sel = self.phase_tree.selection()
-        idx = int(sel[0]) if sel and len(sel) == 1 else None
-        insert_pos = (idx + 1) if idx is not None else len(self.order.phases)
-        self.order.phases.insert(insert_pos, Phase(name=name, planned_hours=hours, parallel_group=0))
-        self._reload_phase_tree()
-        self.refresh_eta()
-        self._explain(f"已添加新工序: {name} ({hours}小时)")
-
-    def delete_phase(self):
-        if not self.order:
-            messagebox.showwarning("无订单", "请先创建订单。")
-            return
-        idx = self._get_selected_phase_index()
-        if idx is None:
-            messagebox.showwarning("未选择", "请先选择一个工序。")
-            return
-        phase_name = self.order.phases[idx].name
-        if messagebox.askyesno("确认删除", f"确定要删除工序 '{phase_name}' 吗？"):
-            self.order.phases.pop(idx)
-            self._reload_phase_tree()
-            self.refresh_eta()
-            self._explain(f"已删除工序: {phase_name}")
-
-    def toggle_phase_done(self):
-        if not self.order:
-            messagebox.showwarning("无订单", "请先创建订单。")
-            return
-        idx = self._get_selected_phase_index()
-        if idx is None:
-            messagebox.showwarning("未选择", "请先选择一个工序。")
-            return
-        self.order.phases[idx].done = not self.order.phases[idx].done
-        self._reload_phase_tree()
-        self.refresh_eta()
-
-    def add_event(self):
-        if not self.order:
-            messagebox.showwarning("无订单", "请先创建订单。")
-            return
-        try:
-            d = datetime.strptime(self.ev_date_var.get().strip(), "%Y-%m-%d").date()
-        except ValueError:
-            messagebox.showerror("无效的日期", "日期格式必须是 YYYY-MM-DD。")
-            return
-        try:
-            hours = float(self.ev_hours_var.get())
-            if hours < 0:
-                raise ValueError
-        except ValueError:
-            messagebox.showerror("无效的工时", "损失工时必须是非负数。")
-            return
-        reason = self.ev_reason_var.get().strip() or "事件"
-        self.order.events.append(Event(day=d, hours_lost=hours, reason=reason))
-        self._reload_event_list()
-        self.refresh_eta()
-
-    def remove_event(self):
-        if not self.order:
-            return
-        sel = self.event_list.curselection()
-        if not sel:
-            return
-        i = sel[0]
-        if 0 <= i < len(self.order.events):
-            self.order.events.pop(i)
-        self._reload_event_list()
-        self.refresh_eta()
-
-    def report_scrap(self):
-        """
-        报废重做功能：
-        - 支持部分报废（报废比例 0~1）
-        - 根据报废比例计算需要补做的数量
-        - 按比例缩放重做工序的工时
-        """
-        if not self.order:
-            messagebox.showwarning("无订单", "请先创建订单。")
-            return
-        idx = self._get_selected_phase_index()
-        if idx is None:
-            messagebox.showwarning("未选择", "请先选择一个检验工序（检验X）。")
+            with open(self.app_template_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except Exception:
+            self.statusBar().showMessage("模板文件读取失败，已使用默认模板。", 5000)
             return
 
-        phase = self.order.phases[idx]
-        if not phase.name.startswith("检验"):
-            messagebox.showerror("非检验工序", "请选择一个'检验X'阶段，然后再点报废重做。")
-            return
-
-        # Guard: if any later phases already marked done, this MVP can't safely remodel that history
-        if any(p.done for p in self.order.phases[idx+1:]):
-            messagebox.showerror(
-                "暂不允许报废",
-                "你选择的检验后面已经有阶段标记为完成。\n"
-                "这个 MVP 版本为了避免逻辑混乱，暂不支持在后续已完成时再触发整批重做。\n"
-                "建议：把后续完成状态先取消，再触发报废重做。"
+        self.event_reasons = list(data.get("event_reasons", self.event_reasons))
+        templates = data.get("templates", {})
+        self.equipment_templates = [
+            Equipment(
+                equipment_id=e.get("equipment_id", ""),
+                total_count=int(e.get("total_count", 1)),
+                available_count=int(e.get("available_count", 1)),
             )
-            return
-
-        # 弹出对话框输入报废比例
-        scrap_dialog = tk.Toplevel(self)
-        scrap_dialog.title("报废重做")
-        scrap_dialog.geometry("400x200")
-        scrap_dialog.transient(self)
-        scrap_dialog.grab_set()
-
-        ttk.Label(scrap_dialog, text=f"当前检验工序: {phase.name}", font=("", 10, "bold")).pack(pady=10)
-        ttk.Label(scrap_dialog, text=f"订单总数量: {self.order.quantity} 件").pack(pady=5)
-
-        frame = ttk.Frame(scrap_dialog)
-        frame.pack(pady=10)
-        
-        ttk.Label(frame, text="报废比例 (0.0-1.0):").grid(row=0, column=0, padx=5, pady=5, sticky="w")
-        scrap_ratio_var = tk.StringVar(value="1.0")
-        ttk.Entry(frame, textvariable=scrap_ratio_var, width=10).grid(row=0, column=1, padx=5, pady=5)
-        
-        result_label = ttk.Label(frame, text="", foreground="blue")
-        result_label.grid(row=1, column=0, columnspan=2, pady=5)
-
-        def update_preview(*args):
-            try:
-                ratio = float(scrap_ratio_var.get())
-                if 0 <= ratio <= 1:
-                    scrap_qty = int(self.order.quantity * ratio)
-                    result_label.config(text=f"报废数量: {scrap_qty} 件\n需要补做: {scrap_qty} 件")
-                else:
-                    result_label.config(text="比例必须在 0.0 到 1.0 之间", foreground="red")
-            except:
-                result_label.config(text="请输入有效数字", foreground="red")
-
-        scrap_ratio_var.trace('w', update_preview)
-        update_preview()
-
-        def confirm_scrap():
-            try:
-                ratio = float(scrap_ratio_var.get())
-                if ratio < 0 or ratio > 1:
-                    raise ValueError("比例必须在 0.0 到 1.0 之间")
-                if ratio == 0:
-                    messagebox.showinfo("提示", "报废比例为0，无需重做。")
-                    scrap_dialog.destroy()
-                    return
-                
-                scrap_qty = int(self.order.quantity * ratio)
-                
-                # Insert rebuild chain with scaled hours
-                insert_pos = idx + 1
-                extra: List[Phase] = []
-
-                # 重采毛坯工时按比例缩放，添加缩进使其更醒目
-                lead_hours = self.order.blank_lead_days * self.cal.working_hours_per_day * ratio
-                if lead_hours > 0:
-                    extra.append(Phase(f"    ↻ 重采毛坯(报废{scrap_qty}件) - {self.order.blank_lead_days}天×{ratio:.1%}", lead_hours))
-
-                # 车床工序链按比例缩放，添加缩进和标记
-                base_chain = build_lathe_chain(self.order.lathe_ops)
-                for p in base_chain:
-                    scaled_hours = p.planned_hours * ratio
-                    extra.append(Phase(f"    ↻ {p.name}(补{scrap_qty}件)", scaled_hours))
-
-                self.order.phases[insert_pos:insert_pos] = extra
-
-                self._reload_phase_tree()
-                self.refresh_eta()
-                self._explain(
-                    f"在'{phase.name}'处报废 {ratio:.1%} ({scrap_qty}件)。"
-                    f"已插入重做工序，工时按比例缩放。"
+            for e in templates.get("equipment", [])
+        ]
+        self.phase_templates = [
+            Phase(
+                name=ph.get("name", ""),
+                planned_hours=float(ph.get("planned_hours", 0)),
+                parallel_group=int(ph.get("parallel_group", 0)),
+                equipment_id=ph.get("equipment_id", ""),
+                assigned_employee=ph.get("assigned_employee", ""),
+            )
+            for ph in templates.get("phases", [])
+        ]
+        self.employee_templates = list(templates.get("employees", []))
+        self.shift_templates = []
+        for tpl in templates.get("shifts", []):
+            week_plan = [
+                ShiftDayPlan(
+                    shift_count=int(day.get("shift_count", 0)),
+                    hours_per_shift=float(day.get("hours_per_shift", 0.0)),
                 )
-                
-                scrap_dialog.destroy()
-                messagebox.showinfo("完成", f"已添加报废重做工序\n报废数量: {scrap_qty} 件\n总新增工时已按 {ratio:.1%} 比例缩放")
-                
-            except ValueError as e:
-                messagebox.showerror("输入错误", str(e))
+                for day in tpl.get("week_plan", [])
+            ]
+            if len(week_plan) < 7:
+                week_plan.extend([ShiftDayPlan(0, 0.0) for _ in range(7 - len(week_plan))])
+            self.shift_templates.append(ShiftTemplate(name=tpl.get("name", "班次模板"), week_plan=week_plan))
+        self.active_shift_template_name = templates.get("active_shift", "")
 
-        btn_frame = ttk.Frame(scrap_dialog)
-        btn_frame.pack(pady=10)
-        ttk.Button(btn_frame, text="确认", command=confirm_scrap).pack(side="left", padx=5)
-        ttk.Button(btn_frame, text="取消", command=scrap_dialog.destroy).pack(side="left", padx=5)
+    def _save_app_templates(self) -> None:
+        data = {
+            "version": 1,
+            "event_reasons": self.event_reasons,
+            "templates": {
+                "equipment": [
+                    {
+                        "equipment_id": e.equipment_id,
+                        "total_count": e.total_count,
+                        "available_count": e.available_count,
+                    }
+                    for e in self.equipment_templates
+                ],
+                "phases": [
+                    {
+                        "name": ph.name,
+                        "planned_hours": ph.planned_hours,
+                        "parallel_group": ph.parallel_group,
+                        "equipment_id": ph.equipment_id,
+                        "assigned_employee": ph.assigned_employee,
+                    }
+                    for ph in self.phase_templates
+                ],
+                "employees": list(self.employee_templates),
+                "shifts": [
+                    {
+                        "name": tpl.name,
+                        "week_plan": [
+                            {
+                                "shift_count": day.shift_count,
+                                "hours_per_shift": day.hours_per_shift,
+                            }
+                            for day in tpl.week_plan
+                        ],
+                    }
+                    for tpl in self.shift_templates
+                ],
+                "active_shift": self.active_shift_template_name,
+            },
+        }
+        try:
+            with open(self.app_template_path, "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+        except Exception as exc:
+            self.statusBar().showMessage(f"模板保存失败: {exc}", 5000)
 
-    def refresh_eta(self):
+    def _ensure_default_templates(self) -> None:
+        if not self.event_reasons:
+            self.event_reasons = ["员工请假", "设备故障", "停电", "材料短缺", "质量问题", "其他"]
+        if not self.shift_templates:
+            week_plan = [
+                ShiftDayPlan(1, 8.0),
+                ShiftDayPlan(1, 8.0),
+                ShiftDayPlan(1, 8.0),
+                ShiftDayPlan(1, 8.0),
+                ShiftDayPlan(1, 8.0),
+                ShiftDayPlan(2, 8.0),
+                ShiftDayPlan(0, 0.0),
+            ]
+            self.shift_templates.append(ShiftTemplate("周六两班", week_plan))
+            self.active_shift_template_name = "周六两班"
+        if self.active_shift_template_name and not self._current_shift_template():
+            self.active_shift_template_name = self.shift_templates[0].name
+        if not self.active_shift_template_name and self.shift_templates:
+            self.active_shift_template_name = self.shift_templates[0].name
+        self._save_app_templates()
+
+    def _current_shift_template(self) -> Optional[ShiftTemplate]:
+        for tpl in self.shift_templates:
+            if tpl.name == self.active_shift_template_name:
+                return tpl
+        return self.shift_templates[0] if self.shift_templates else None
+
+    def _apply_active_shift_template(self) -> None:
+        self.cal.shift_template = self._current_shift_template()
+        if hasattr(self, "admin_shift_active_label"):
+            self._update_active_shift_label()
+        self.refresh_eta()
+
+    def _maybe_import_templates_from_order(self, data: Dict[str, object]) -> None:
+        if self.equipment_templates or self.phase_templates or self.employee_templates or self.shift_templates:
+            return
+        if "templates" not in data and "event_reasons" not in data:
+            return
+        self.event_reasons = list(data.get("event_reasons", self.event_reasons))
+        templates = data.get("templates", {})
+        self.equipment_templates = [
+            Equipment(
+                equipment_id=e.get("equipment_id", ""),
+                total_count=int(e.get("total_count", 1)),
+                available_count=int(e.get("available_count", 1)),
+            )
+            for e in templates.get("equipment", [])
+        ]
+        self.phase_templates = [
+            Phase(
+                name=ph.get("name", ""),
+                planned_hours=float(ph.get("planned_hours", 0)),
+                parallel_group=int(ph.get("parallel_group", 0)),
+                equipment_id=ph.get("equipment_id", ""),
+                assigned_employee=ph.get("assigned_employee", ""),
+            )
+            for ph in templates.get("phases", [])
+        ]
+        self.employee_templates = list(templates.get("employees", []))
+        self.shift_templates = []
+        for tpl in templates.get("shifts", []):
+            week_plan = [
+                ShiftDayPlan(
+                    shift_count=int(day.get("shift_count", 0)),
+                    hours_per_shift=float(day.get("hours_per_shift", 0.0)),
+                )
+                for day in tpl.get("week_plan", [])
+            ]
+            if len(week_plan) < 7:
+                week_plan.extend([ShiftDayPlan(0, 0.0) for _ in range(7 - len(week_plan))])
+            self.shift_templates.append(ShiftTemplate(name=tpl.get("name", "班次模板"), week_plan=week_plan))
+        self.active_shift_template_name = templates.get("active_shift", "")
+        self._ensure_default_templates()
+        self.cal.shift_template = self._current_shift_template()
+
+    def _refresh_event_reason_combo(self) -> None:
+        current = self.event_reason_combo.currentText()
+        self.event_reason_combo.clear()
+        self.event_reason_combo.addItems(self.event_reasons)
+        if current:
+            self.event_reason_combo.setCurrentText(current)
+        if hasattr(self, "admin_event_reason_combo"):
+            admin_current = self.admin_event_reason_combo.currentText()
+            self.admin_event_reason_combo.clear()
+            self.admin_event_reason_combo.addItems(self.event_reasons)
+            if admin_current:
+                self.admin_event_reason_combo.setCurrentText(admin_current)
+
+    def _refresh_admin_views(self) -> None:
+        self._refresh_admin_events_table()
+        self._refresh_admin_reason_list()
+        self._refresh_admin_equipment_templates_table()
+        self._refresh_admin_phase_templates_table()
+        self._refresh_admin_employee_templates_list()
+        self._refresh_admin_shift_templates_list()
+        self._refresh_admin_product_combo()
+        self._refresh_admin_phase_template_combos()
+        self._refresh_event_reason_combo()
+
+    # ------------------------
+    # Equipment management
+    # ------------------------
+
+    def on_equipment_select(self) -> None:
+        row = self.equipment_table.currentRow()
+        if row < 0 or row >= len(self.equipment):
+            return
+        eq = self.equipment[row]
+        self.equipment_id_edit.setText(eq.equipment_id)
+        self.equipment_total_spin.setValue(eq.total_count)
+        self.equipment_available_spin.setValue(eq.available_count)
+
+    def add_or_update_equipment(self) -> None:
+        eq_id = self.equipment_id_edit.text().strip()
+        if not eq_id:
+            QtWidgets.QMessageBox.warning(self, "无效输入", "设备编号不能为空。")
+            return
+        total = int(self.equipment_total_spin.value())
+        available = int(self.equipment_available_spin.value())
+        if available > total:
+            available = total
+        existing = next((e for e in self.equipment if e.equipment_id == eq_id), None)
+        if existing:
+            existing.total_count = total
+            existing.available_count = available
+        else:
+            self.equipment.append(Equipment(eq_id, total, available))
+        self._sync_equipment_to_order()
+        self._refresh_equipment_table()
+        self._refresh_phase_equipment_combo()
+        self._refresh_admin_phase_template_combos()
+        self.refresh_eta()
+        self._auto_save()
+
+    def remove_equipment(self) -> None:
+        row = self.equipment_table.currentRow()
+        if row < 0 or row >= len(self.equipment):
+            return
+        del self.equipment[row]
+        self._sync_equipment_to_order()
+        self._refresh_equipment_table()
+        self._refresh_phase_equipment_combo()
+        self._refresh_admin_phase_template_combos()
+        self.refresh_eta()
+        self._auto_save()
+
+    def _sync_equipment_to_order(self) -> None:
+        if self.order:
+            self.order.equipment = list(self.equipment)
+
+    def _refresh_equipment_table(self) -> None:
+        self.equipment_table.setRowCount(0)
+        for eq in self.equipment:
+            row = self.equipment_table.rowCount()
+            self.equipment_table.insertRow(row)
+            self.equipment_table.setItem(row, 0, QtWidgets.QTableWidgetItem(eq.equipment_id))
+            self.equipment_table.setItem(row, 1, QtWidgets.QTableWidgetItem(str(eq.total_count)))
+            self.equipment_table.setItem(row, 2, QtWidgets.QTableWidgetItem(str(eq.available_count)))
+
+    # ------------------------
+    # Employees management
+    # ------------------------
+
+    def add_employee(self) -> None:
+        name = self.employee_name_edit.text().strip()
+        if not name:
+            return
+        if name not in self.employees:
+            self.employees.append(name)
+        self.employee_name_edit.clear()
+        self._sync_employees_to_order()
+        self._refresh_employee_list()
+        self._refresh_phase_employee_combo()
+        self._refresh_admin_phase_template_combos()
+        self._auto_save()
+
+    def remove_employee(self) -> None:
+        items = self.employee_list.selectedItems()
+        if not items:
+            return
+        name = items[0].text()
+        if name in self.employees:
+            self.employees.remove(name)
+        self._sync_employees_to_order()
+        self._refresh_employee_list()
+        self._refresh_phase_employee_combo()
+        self._refresh_admin_phase_template_combos()
+        self._auto_save()
+
+    def _sync_employees_to_order(self) -> None:
+        if self.order:
+            self.order.employees = list(self.employees)
+
+    def _refresh_employee_list(self) -> None:
+        self.employee_list.clear()
+        self.employee_list.addItems(self.employees)
+
+    def _refresh_phase_employee_combo(self) -> None:
+        current = self.phase_employee_combo.currentText()
+        self.phase_employee_combo.clear()
+        self.phase_employee_combo.addItems(self.employees)
+        if current:
+            self.phase_employee_combo.setCurrentText(current)
+
+    def _refresh_phase_equipment_combo(self) -> None:
+        current = self.phase_equipment_combo.currentText()
+        self.phase_equipment_combo.clear()
+        self.phase_equipment_combo.addItems([e.equipment_id for e in self.equipment])
+        if current:
+            self.phase_equipment_combo.setCurrentText(current)
+
+    # ------------------------
+    # Products management
+    # ------------------------
+
+    def on_product_select(self) -> None:
         if not self.order:
+            return
+        row = self.products_table.currentRow()
+        if row < 0 or row >= len(self.order.products):
+            return
+        product = self.order.products[row]
+        self.product_id_edit.setText(product.product_id)
+        self.product_part_edit.setText(product.part_number)
+        self.product_qty_spin.setValue(product.quantity)
+        self._refresh_phase_table(product)
+
+    def add_or_update_product(self) -> None:
+        if not self.order:
+            QtWidgets.QMessageBox.warning(self, "无订单", "请先创建或加载订单。")
+            return
+        product_id = self.product_id_edit.text().strip()
+        if not product_id:
+            QtWidgets.QMessageBox.warning(self, "无效输入", "产品名不能为空。")
+            return
+        part_number = self.product_part_edit.text().strip()
+        quantity = int(self.product_qty_spin.value())
+
+        row = self.products_table.currentRow()
+        if 0 <= row < len(self.order.products):
+            product = self.order.products[row]
+            product.product_id = product_id
+            product.part_number = part_number
+            product.quantity = quantity
+        else:
+            self.order.products.append(Product(product_id, part_number, quantity))
+        self._refresh_products_table()
+        self._refresh_admin_product_combo()
+        self.refresh_eta()
+        self._auto_save()
+
+    def remove_product(self) -> None:
+        if not self.order:
+            return
+        row = self.products_table.currentRow()
+        if row < 0 or row >= len(self.order.products):
+            return
+        del self.order.products[row]
+        self._refresh_products_table()
+        self._refresh_admin_product_combo()
+        self.phases_table.setRowCount(0)
+        self.refresh_eta()
+        self._auto_save()
+
+    def _refresh_products_table(self) -> None:
+        self.products_table.setRowCount(0)
+        if not self.order:
+            return
+        equipment_map = _equipment_available_map(self.order)
+        for product in self.order.products:
+            row = self.products_table.rowCount()
+            self.products_table.insertRow(row)
+            progress = _product_progress(product, equipment_map)
+            self.products_table.setItem(row, 0, QtWidgets.QTableWidgetItem(product.product_id))
+            self.products_table.setItem(row, 1, QtWidgets.QTableWidgetItem(product.part_number))
+            self.products_table.setItem(row, 2, QtWidgets.QTableWidgetItem(str(product.quantity)))
+            self.products_table.setItem(row, 3, QtWidgets.QTableWidgetItem(f"{progress:.0%}"))
+
+    # ------------------------
+    # Phases management
+    # ------------------------
+
+    def _current_product(self) -> Optional[Product]:
+        if not self.order:
+            return None
+        row = self.products_table.currentRow()
+        if row < 0 or row >= len(self.order.products):
+            return None
+        return self.order.products[row]
+
+    def on_phase_select(self) -> None:
+        product = self._current_product()
+        if not product:
+            return
+        row = self.phases_table.currentRow()
+        if row < 0 or row >= len(product.phases):
+            return
+        phase = product.phases[row]
+        self.phase_name_edit.setText(phase.name)
+        self.phase_hours_spin.setValue(phase.planned_hours)
+        self.phase_equipment_combo.setCurrentText(phase.equipment_id)
+        self.phase_employee_combo.setCurrentText(phase.assigned_employee)
+        self.phase_parallel_spin.setValue(phase.parallel_group)
+        self.phase_done_check.setChecked(phase.done)
+
+    def add_or_update_phase(self) -> None:
+        product = self._current_product()
+        if not product:
+            QtWidgets.QMessageBox.warning(self, "未选择产品", "请先选择一个产品。")
+            return
+        name = self.phase_name_edit.text().strip()
+        if not name:
+            QtWidgets.QMessageBox.warning(self, "无效输入", "工序名称不能为空。")
+            return
+        hours = float(self.phase_hours_spin.value())
+        equipment_id = self.phase_equipment_combo.currentText().strip()
+        employee = self.phase_employee_combo.currentText().strip()
+        parallel = int(self.phase_parallel_spin.value())
+        done = self.phase_done_check.isChecked()
+
+        row = self.phases_table.currentRow()
+        if 0 <= row < len(product.phases):
+            phase = product.phases[row]
+            phase.name = name
+            phase.planned_hours = hours
+            phase.equipment_id = equipment_id
+            phase.assigned_employee = employee
+            phase.parallel_group = parallel
+            phase.done = done
+        else:
+            product.phases.append(
+                Phase(
+                    name=name,
+                    planned_hours=hours,
+                    equipment_id=equipment_id,
+                    assigned_employee=employee,
+                    parallel_group=parallel,
+                    done=done,
+                )
+            )
+        self._refresh_phase_table(product)
+        self._refresh_products_table()
+        self.refresh_eta()
+        self._auto_save()
+
+    def remove_phase(self) -> None:
+        product = self._current_product()
+        if not product:
+            return
+        row = self.phases_table.currentRow()
+        if row < 0 or row >= len(product.phases):
+            return
+        del product.phases[row]
+        self._refresh_phase_table(product)
+        self._refresh_products_table()
+        self.refresh_eta()
+        self._auto_save()
+
+    def toggle_phase_done(self) -> None:
+        product = self._current_product()
+        if not product:
+            return
+        row = self.phases_table.currentRow()
+        if row < 0 or row >= len(product.phases):
+            return
+        product.phases[row].done = not product.phases[row].done
+        self._refresh_phase_table(product)
+        self._refresh_products_table()
+        self.refresh_eta()
+        self._auto_save()
+
+    def set_parallel_group(self) -> None:
+        product = self._current_product()
+        if not product:
+            return
+        rows = {item.row() for item in self.phases_table.selectedItems()}
+        if len(rows) < 2:
+            QtWidgets.QMessageBox.information(self, "提示", "请至少选择两个工序来设置并行组。")
+            return
+        max_group = max((p.parallel_group for p in product.phases), default=0)
+        new_group = max_group + 1
+        for row in rows:
+            if 0 <= row < len(product.phases):
+                product.phases[row].parallel_group = new_group
+        self._refresh_phase_table(product)
+        self.refresh_eta()
+        self._auto_save()
+
+    def clear_parallel_group(self) -> None:
+        product = self._current_product()
+        if not product:
+            return
+        rows = {item.row() for item in self.phases_table.selectedItems()}
+        if not rows:
+            return
+        for row in rows:
+            if 0 <= row < len(product.phases):
+                product.phases[row].parallel_group = 0
+        self._refresh_phase_table(product)
+        self.refresh_eta()
+        self._auto_save()
+
+    def _refresh_phase_table(self, product: Product) -> None:
+        self.phases_table.setRowCount(0)
+        for phase in product.phases:
+            row = self.phases_table.rowCount()
+            self.phases_table.insertRow(row)
+            self.phases_table.setItem(row, 0, QtWidgets.QTableWidgetItem(phase.name))
+            self.phases_table.setItem(row, 1, QtWidgets.QTableWidgetItem(f"{phase.planned_hours:g}"))
+            self.phases_table.setItem(row, 2, QtWidgets.QTableWidgetItem(phase.equipment_id))
+            self.phases_table.setItem(row, 3, QtWidgets.QTableWidgetItem(phase.assigned_employee))
+            self.phases_table.setItem(row, 4, QtWidgets.QTableWidgetItem(str(phase.parallel_group)))
+            self.phases_table.setItem(row, 5, QtWidgets.QTableWidgetItem("是" if phase.done else "否"))
+
+    # ------------------------
+    # Events
+    # ------------------------
+
+    def add_event(self) -> None:
+        if not self.order:
+            return
+        day = _qdate_to_date(self.event_date_edit.date())
+        hours = float(self.event_hours_spin.value())
+        reason = self.event_reason_combo.currentText().strip() or "事件"
+        self.order.events.append(Event(day=day, hours_lost=hours, reason=reason))
+        self._refresh_events_table()
+        self._refresh_admin_events_table()
+        self.refresh_eta()
+        self._auto_save()
+
+    def remove_event(self) -> None:
+        if not self.order:
+            return
+        row = self.events_table.currentRow()
+        if row < 0 or row >= len(self.order.events):
+            return
+        del self.order.events[row]
+        self._refresh_events_table()
+        self._refresh_admin_events_table()
+        self.refresh_eta()
+        self._auto_save()
+
+    def _refresh_events_table(self) -> None:
+        self.events_table.setRowCount(0)
+        if not self.order:
+            return
+        for ev in self.order.events:
+            row = self.events_table.rowCount()
+            self.events_table.insertRow(row)
+            self.events_table.setItem(row, 0, QtWidgets.QTableWidgetItem(ev.day.isoformat()))
+            self.events_table.setItem(row, 1, QtWidgets.QTableWidgetItem(f"{ev.hours_lost:g}"))
+            self.events_table.setItem(row, 2, QtWidgets.QTableWidgetItem(ev.reason))
+
+    # ------------------------
+    # Admin: Events & Reasons
+    # ------------------------
+
+    def _refresh_admin_events_table(self) -> None:
+        self.admin_events_table.setRowCount(0)
+        if not self.order:
+            return
+        for ev in self.order.events:
+            row = self.admin_events_table.rowCount()
+            self.admin_events_table.insertRow(row)
+            self.admin_events_table.setItem(row, 0, QtWidgets.QTableWidgetItem(ev.day.isoformat()))
+            self.admin_events_table.setItem(row, 1, QtWidgets.QTableWidgetItem(f"{ev.hours_lost:g}"))
+            self.admin_events_table.setItem(row, 2, QtWidgets.QTableWidgetItem(ev.reason))
+
+    def on_admin_event_select(self) -> None:
+        if not self.order:
+            return
+        row = self.admin_events_table.currentRow()
+        if row < 0 or row >= len(self.order.events):
+            return
+        ev = self.order.events[row]
+        self.admin_event_date_edit.setDate(_date_to_qdate(ev.day))
+        self.admin_event_hours_spin.setValue(ev.hours_lost)
+        self.admin_event_reason_combo.setCurrentText(ev.reason)
+
+    def admin_add_event(self) -> None:
+        if not self.order:
+            return
+        day = _qdate_to_date(self.admin_event_date_edit.date())
+        hours = float(self.admin_event_hours_spin.value())
+        reason = self.admin_event_reason_combo.currentText().strip() or "事件"
+        self.order.events.append(Event(day=day, hours_lost=hours, reason=reason))
+        self._refresh_events_table()
+        self._refresh_admin_events_table()
+        self.refresh_eta()
+        self._auto_save()
+
+    def admin_update_event(self) -> None:
+        if not self.order:
+            return
+        row = self.admin_events_table.currentRow()
+        if row < 0 or row >= len(self.order.events):
+            return
+        ev = self.order.events[row]
+        ev.day = _qdate_to_date(self.admin_event_date_edit.date())
+        ev.hours_lost = float(self.admin_event_hours_spin.value())
+        ev.reason = self.admin_event_reason_combo.currentText().strip() or "事件"
+        self._refresh_events_table()
+        self._refresh_admin_events_table()
+        self.refresh_eta()
+        self._auto_save()
+
+    def admin_remove_event(self) -> None:
+        if not self.order:
+            return
+        row = self.admin_events_table.currentRow()
+        if row < 0 or row >= len(self.order.events):
+            return
+        del self.order.events[row]
+        self._refresh_events_table()
+        self._refresh_admin_events_table()
+        self.refresh_eta()
+        self._auto_save()
+
+    def _refresh_admin_reason_list(self) -> None:
+        self.admin_reason_list.clear()
+        self.admin_reason_list.addItems(self.event_reasons)
+
+    def on_admin_reason_select(self) -> None:
+        items = self.admin_reason_list.selectedItems()
+        if not items:
+            return
+        self.admin_reason_edit.setText(items[0].text())
+
+    def admin_add_reason(self) -> None:
+        reason = self.admin_reason_edit.text().strip()
+        if not reason:
+            return
+        if reason in self.event_reasons:
+            QtWidgets.QMessageBox.information(self, "提示", "该原因已存在。")
+            return
+        self.event_reasons.append(reason)
+        self.admin_reason_edit.clear()
+        self._refresh_admin_reason_list()
+        self._refresh_event_reason_combo()
+        self._save_app_templates()
+        self._auto_save()
+
+    def admin_update_reason(self) -> None:
+        items = self.admin_reason_list.selectedItems()
+        if not items:
+            return
+        new_reason = self.admin_reason_edit.text().strip()
+        if not new_reason:
+            return
+        old_reason = items[0].text()
+        if new_reason != old_reason and new_reason in self.event_reasons:
+            QtWidgets.QMessageBox.information(self, "提示", "该原因已存在。")
+            return
+        idx = self.event_reasons.index(old_reason)
+        self.event_reasons[idx] = new_reason
+        if self.order:
+            for ev in self.order.events:
+                if ev.reason == old_reason:
+                    ev.reason = new_reason
+        self._refresh_events_table()
+        self._refresh_admin_events_table()
+        self._refresh_admin_reason_list()
+        self._refresh_event_reason_combo()
+        self._save_app_templates()
+        self._auto_save()
+
+    def admin_remove_reason(self) -> None:
+        items = self.admin_reason_list.selectedItems()
+        if not items:
+            return
+        reason = items[0].text()
+        if reason in self.event_reasons:
+            self.event_reasons.remove(reason)
+        self._refresh_admin_reason_list()
+        self._refresh_event_reason_combo()
+        self._save_app_templates()
+        self._auto_save()
+
+    # ------------------------
+    # Admin: Templates
+    # ------------------------
+
+    def _refresh_admin_equipment_templates_table(self) -> None:
+        self.admin_equipment_template_table.setRowCount(0)
+        for eq in self.equipment_templates:
+            row = self.admin_equipment_template_table.rowCount()
+            self.admin_equipment_template_table.insertRow(row)
+            self.admin_equipment_template_table.setItem(row, 0, QtWidgets.QTableWidgetItem(eq.equipment_id))
+            self.admin_equipment_template_table.setItem(row, 1, QtWidgets.QTableWidgetItem(str(eq.total_count)))
+            self.admin_equipment_template_table.setItem(row, 2, QtWidgets.QTableWidgetItem(str(eq.available_count)))
+
+    def on_admin_equipment_template_select(self) -> None:
+        row = self.admin_equipment_template_table.currentRow()
+        if row < 0 or row >= len(self.equipment_templates):
+            return
+        eq = self.equipment_templates[row]
+        self.admin_equipment_id_edit.setText(eq.equipment_id)
+        self.admin_equipment_total_spin.setValue(eq.total_count)
+        self.admin_equipment_available_spin.setValue(eq.available_count)
+
+    def admin_add_or_update_equipment_template(self) -> None:
+        eq_id = self.admin_equipment_id_edit.text().strip()
+        if not eq_id:
+            return
+        total = int(self.admin_equipment_total_spin.value())
+        available = int(self.admin_equipment_available_spin.value())
+        if available > total:
+            available = total
+        existing = next((e for e in self.equipment_templates if e.equipment_id == eq_id), None)
+        if existing:
+            existing.total_count = total
+            existing.available_count = available
+        else:
+            self.equipment_templates.append(Equipment(eq_id, total, available))
+        self._refresh_admin_equipment_templates_table()
+        self._refresh_admin_phase_template_combos()
+        self._save_app_templates()
+
+    def admin_remove_equipment_template(self) -> None:
+        row = self.admin_equipment_template_table.currentRow()
+        if row < 0 or row >= len(self.equipment_templates):
+            return
+        del self.equipment_templates[row]
+        self._refresh_admin_equipment_templates_table()
+        self._refresh_admin_phase_template_combos()
+        self._save_app_templates()
+
+    def admin_apply_equipment_template(self) -> None:
+        if not self.order:
+            QtWidgets.QMessageBox.information(self, "提示", "请先创建或加载订单。")
+            return
+        self.equipment = [
+            Equipment(e.equipment_id, e.total_count, e.available_count)
+            for e in self.equipment_templates
+        ]
+        self._sync_equipment_to_order()
+        self._refresh_equipment_table()
+        self._refresh_phase_equipment_combo()
+        self._refresh_admin_phase_template_combos()
+        self.refresh_eta()
+        self._auto_save()
+
+    def _refresh_admin_phase_templates_table(self) -> None:
+        self.admin_phase_template_table.setRowCount(0)
+        for phase in self.phase_templates:
+            row = self.admin_phase_template_table.rowCount()
+            self.admin_phase_template_table.insertRow(row)
+            self.admin_phase_template_table.setItem(row, 0, QtWidgets.QTableWidgetItem(phase.name))
+            self.admin_phase_template_table.setItem(row, 1, QtWidgets.QTableWidgetItem(f"{phase.planned_hours:g}"))
+            self.admin_phase_template_table.setItem(row, 2, QtWidgets.QTableWidgetItem(phase.equipment_id))
+            self.admin_phase_template_table.setItem(row, 3, QtWidgets.QTableWidgetItem(phase.assigned_employee))
+            self.admin_phase_template_table.setItem(row, 4, QtWidgets.QTableWidgetItem(str(phase.parallel_group)))
+
+    def on_admin_phase_template_select(self) -> None:
+        row = self.admin_phase_template_table.currentRow()
+        if row < 0 or row >= len(self.phase_templates):
+            return
+        phase = self.phase_templates[row]
+        self.admin_phase_name_edit.setText(phase.name)
+        self.admin_phase_hours_spin.setValue(phase.planned_hours)
+        self.admin_phase_equipment_combo.setCurrentText(phase.equipment_id)
+        self.admin_phase_employee_combo.setCurrentText(phase.assigned_employee)
+        self.admin_phase_parallel_spin.setValue(phase.parallel_group)
+
+    def admin_add_or_update_phase_template(self) -> None:
+        name = self.admin_phase_name_edit.text().strip()
+        if not name:
+            return
+        hours = float(self.admin_phase_hours_spin.value())
+        equipment_id = self.admin_phase_equipment_combo.currentText().strip()
+        employee = self.admin_phase_employee_combo.currentText().strip()
+        parallel = int(self.admin_phase_parallel_spin.value())
+
+        row = self.admin_phase_template_table.currentRow()
+        if 0 <= row < len(self.phase_templates):
+            phase = self.phase_templates[row]
+            phase.name = name
+            phase.planned_hours = hours
+            phase.equipment_id = equipment_id
+            phase.assigned_employee = employee
+            phase.parallel_group = parallel
+            phase.done = False
+        else:
+            self.phase_templates.append(
+                Phase(
+                    name=name,
+                    planned_hours=hours,
+                    equipment_id=equipment_id,
+                    assigned_employee=employee,
+                    parallel_group=parallel,
+                )
+            )
+        self._refresh_admin_phase_templates_table()
+        self._save_app_templates()
+
+    def admin_remove_phase_template(self) -> None:
+        row = self.admin_phase_template_table.currentRow()
+        if row < 0 or row >= len(self.phase_templates):
+            return
+        del self.phase_templates[row]
+        self._refresh_admin_phase_templates_table()
+        self._save_app_templates()
+
+    def admin_apply_phase_template(self) -> None:
+        if not self.order:
+            QtWidgets.QMessageBox.information(self, "提示", "请先创建或加载订单。")
+            return
+        product_id = self.admin_phase_product_combo.currentText().strip()
+        product = self._get_product_by_id(product_id)
+        if not product:
+            QtWidgets.QMessageBox.information(self, "提示", "请选择要应用的产品。")
+            return
+        product.phases = [
+            Phase(
+                name=ph.name,
+                planned_hours=ph.planned_hours,
+                equipment_id=ph.equipment_id,
+                assigned_employee=ph.assigned_employee,
+                parallel_group=ph.parallel_group,
+            )
+            for ph in self.phase_templates
+        ]
+        self._refresh_phase_table(product)
+        self._refresh_products_table()
+        self.refresh_eta()
+        self._auto_save()
+
+    def _refresh_admin_employee_templates_list(self) -> None:
+        self.admin_employee_template_list.clear()
+        self.admin_employee_template_list.addItems(self.employee_templates)
+
+    def on_admin_employee_template_select(self) -> None:
+        items = self.admin_employee_template_list.selectedItems()
+        if not items:
+            return
+        self.admin_employee_name_edit.setText(items[0].text())
+
+    def admin_add_or_update_employee_template(self) -> None:
+        name = self.admin_employee_name_edit.text().strip()
+        if not name:
+            return
+        items = self.admin_employee_template_list.selectedItems()
+        if items:
+            old_name = items[0].text()
+            if name != old_name and name in self.employee_templates:
+                QtWidgets.QMessageBox.information(self, "提示", "该员工已存在。")
+                return
+            idx = self.employee_templates.index(old_name)
+            self.employee_templates[idx] = name
+        else:
+            if name in self.employee_templates:
+                QtWidgets.QMessageBox.information(self, "提示", "该员工已存在。")
+                return
+            self.employee_templates.append(name)
+        self.admin_employee_name_edit.clear()
+        self._refresh_admin_employee_templates_list()
+        self._refresh_admin_phase_template_combos()
+        self._save_app_templates()
+
+    def admin_remove_employee_template(self) -> None:
+        items = self.admin_employee_template_list.selectedItems()
+        if not items:
+            return
+        name = items[0].text()
+        if name in self.employee_templates:
+            self.employee_templates.remove(name)
+        self._refresh_admin_employee_templates_list()
+        self._refresh_admin_phase_template_combos()
+        self._save_app_templates()
+
+    def admin_apply_employee_template(self) -> None:
+        if not self.order:
+            QtWidgets.QMessageBox.information(self, "提示", "请先创建或加载订单。")
+            return
+        self.employees = list(self.employee_templates)
+        self._sync_employees_to_order()
+        self._refresh_employee_list()
+        self._refresh_phase_employee_combo()
+        self._refresh_admin_phase_template_combos()
+        self.refresh_eta()
+        self._auto_save()
+
+    def _refresh_admin_shift_templates_list(self) -> None:
+        self.admin_shift_template_list.clear()
+        for tpl in self.shift_templates:
+            self.admin_shift_template_list.addItem(tpl.name)
+        if self.active_shift_template_name:
+            matches = self.admin_shift_template_list.findItems(
+                self.active_shift_template_name, QtCore.Qt.MatchFlag.MatchExactly
+            )
+            if matches:
+                self.admin_shift_template_list.setCurrentItem(matches[0])
+        elif self.shift_templates:
+            self.admin_shift_template_list.setCurrentRow(0)
+        self._update_active_shift_label()
+
+    def _update_active_shift_label(self) -> None:
+        name = self.active_shift_template_name or "-"
+        self.admin_shift_active_label.setText(f"当前班次: {name}")
+
+    def _update_shift_row_total(self, row: int) -> None:
+        if row < 0 or row >= len(self.shift_count_spins):
+            return
+        count = self.shift_count_spins[row].value()
+        hours = self.shift_hours_spins[row].value()
+        total_item = self.admin_shift_table.item(row, 3)
+        if total_item:
+            total_item.setText(f"{count * hours:g}")
+
+    def _collect_shift_week_plan(self) -> List[ShiftDayPlan]:
+        week_plan: List[ShiftDayPlan] = []
+        for row in range(7):
+            count = self.shift_count_spins[row].value()
+            hours = self.shift_hours_spins[row].value()
+            week_plan.append(ShiftDayPlan(count, hours))
+        return week_plan
+
+    def _load_shift_plan_to_table(self, week_plan: List[ShiftDayPlan]) -> None:
+        for row in range(7):
+            day = week_plan[row] if row < len(week_plan) else ShiftDayPlan(0, 0.0)
+            self.shift_count_spins[row].setValue(day.shift_count)
+            self.shift_hours_spins[row].setValue(day.hours_per_shift)
+            self._update_shift_row_total(row)
+
+    def on_admin_shift_template_select(self) -> None:
+        items = self.admin_shift_template_list.selectedItems()
+        if not items:
+            return
+        name = items[0].text()
+        tpl = next((t for t in self.shift_templates if t.name == name), None)
+        if not tpl:
+            return
+        self.admin_shift_name_edit.setText(tpl.name)
+        self._load_shift_plan_to_table(tpl.week_plan)
+
+    def admin_add_or_update_shift_template(self) -> None:
+        name = self.admin_shift_name_edit.text().strip()
+        if not name:
+            return
+        week_plan = self._collect_shift_week_plan()
+        items = self.admin_shift_template_list.selectedItems()
+        if items:
+            old_name = items[0].text()
+            if name != old_name and any(t.name == name for t in self.shift_templates):
+                QtWidgets.QMessageBox.information(self, "提示", "该班次模板已存在。")
+                return
+            tpl = next((t for t in self.shift_templates if t.name == old_name), None)
+            if tpl:
+                tpl.name = name
+                tpl.week_plan = week_plan
+                if self.active_shift_template_name == old_name:
+                    self.active_shift_template_name = name
+        else:
+            if any(t.name == name for t in self.shift_templates):
+                QtWidgets.QMessageBox.information(self, "提示", "该班次模板已存在。")
+                return
+            self.shift_templates.append(ShiftTemplate(name, week_plan))
+        self._refresh_admin_shift_templates_list()
+        self._save_app_templates()
+        self._apply_active_shift_template()
+
+    def admin_remove_shift_template(self) -> None:
+        items = self.admin_shift_template_list.selectedItems()
+        if not items:
+            return
+        if len(self.shift_templates) <= 1:
+            QtWidgets.QMessageBox.information(self, "提示", "至少保留一个班次模板。")
+            return
+        name = items[0].text()
+        self.shift_templates = [t for t in self.shift_templates if t.name != name]
+        if self.active_shift_template_name == name:
+            self.active_shift_template_name = self.shift_templates[0].name if self.shift_templates else ""
+        self._refresh_admin_shift_templates_list()
+        self._save_app_templates()
+        self._apply_active_shift_template()
+
+    def admin_set_active_shift_template(self) -> None:
+        items = self.admin_shift_template_list.selectedItems()
+        if not items:
+            return
+        self.active_shift_template_name = items[0].text()
+        self._update_active_shift_label()
+        self._save_app_templates()
+        self._apply_active_shift_template()
+
+    def _refresh_admin_product_combo(self) -> None:
+        current = self.admin_phase_product_combo.currentText()
+        self.admin_phase_product_combo.clear()
+        if not self.order:
+            return
+        self.admin_phase_product_combo.addItems([p.product_id for p in self.order.products])
+        if current:
+            self.admin_phase_product_combo.setCurrentText(current)
+
+    def _refresh_admin_phase_template_combos(self) -> None:
+        equipment_ids = {
+            e.equipment_id for e in self.equipment_templates if e.equipment_id
+        } | {e.equipment_id for e in self.equipment if e.equipment_id}
+        employee_names = set(self.employee_templates) | set(self.employees)
+
+        current_eq = self.admin_phase_equipment_combo.currentText()
+        self.admin_phase_equipment_combo.clear()
+        self.admin_phase_equipment_combo.addItems(sorted(equipment_ids))
+        if current_eq:
+            self.admin_phase_equipment_combo.setCurrentText(current_eq)
+
+        current_emp = self.admin_phase_employee_combo.currentText()
+        self.admin_phase_employee_combo.clear()
+        self.admin_phase_employee_combo.addItems(sorted(employee_names))
+        if current_emp:
+            self.admin_phase_employee_combo.setCurrentText(current_emp)
+
+    def _get_product_by_id(self, product_id: str) -> Optional[Product]:
+        if not self.order:
+            return None
+        for product in self.order.products:
+            if product.product_id == product_id:
+                return product
+        return None
+
+    # ------------------------
+    # ETA / Progress
+    # ------------------------
+
+    def refresh_eta(self) -> None:
+        if not self.order:
+            self.eta_label.setText("预计交期: -")
+            self.remaining_label.setText("剩余工时: -")
+            self.detail_eta_label.setText("预计交期: -")
+            self.detail_progress_label.setText("总体进度: 0%")
+            self.overall_progress.setValue(0)
+            return
+        if not self.cal.shift_template:
+            self.eta_label.setText("预计交期: 请先设置班次模板")
+            self.remaining_label.setText("剩余工时: -")
+            self.detail_eta_label.setText("预计交期: 请先设置班次模板")
+            self.detail_progress_label.setText("总体进度: -")
+            self.overall_progress.setValue(0)
             return
         try:
             result = compute_eta(self.order, self.cal)
-        except Exception as e:
-            messagebox.showerror("交期计算错误", str(e))
+        except Exception as exc:
+            QtWidgets.QMessageBox.critical(self, "交期计算错误", str(exc))
             return
 
         eta_dt: datetime = result["eta_dt"]
         remaining_hours: float = result["remaining_hours"]
-        explanation: List[str] = result["explanation"]
+        self.eta_label.setText(f"预计交期: {eta_dt.strftime('%Y-%m-%d %H:%M')}")
+        self.remaining_label.setText(f"剩余工时: {remaining_hours:g}h")
+        self.detail_eta_label.setText(f"预计交期: {eta_dt.strftime('%Y-%m-%d %H:%M')}")
 
-        self.eta_var.set(eta_dt.strftime("%Y-%m-%d %H:%M"))
-        self.remaining_var.set(f"剩余计划工时: {remaining_hours:g}小时")
+        equipment_map = _equipment_available_map(self.order)
+        total = 0.0
+        done = 0.0
+        for product in self.order.products:
+            for phase in product.phases:
+                hours = _phase_effective_hours(phase, product.quantity, equipment_map)
+                total += hours
+                if phase.done:
+                    done += hours
+        progress = (done / total) if total > 0 else 0.0
+        self.overall_progress.setValue(int(progress * 100))
+        self.detail_progress_label.setText(f"总体进度: {progress:.0%}")
+        self._refresh_products_table()
+        self._refresh_dashboard_product_progress()
+        self._refresh_order_summary()
 
-        self.explain_text.delete("1.0", tk.END)
-        for line in explanation[:300]:
-            self.explain_text.insert(tk.END, line + "\n")
-
-    def _explain(self, line: str):
-        self.explain_text.insert(tk.END, f"[{datetime.now().strftime('%H:%M:%S')}] {line}\n")
-        self.explain_text.see(tk.END)
-
-    def save_order(self):
-        """保存订单数据到JSON文件，可自定义文件名"""
+    def _refresh_dashboard_product_progress(self) -> None:
+        self.product_progress_table.setRowCount(0)
         if not self.order:
-            messagebox.showwarning("无订单", "没有可保存的订单。")
             return
-        
-        # 弹出对话框让用户输入文件名
-        save_dialog = tk.Toplevel(self)
-        save_dialog.title("保存订单")
-        save_dialog.geometry("400x150")
-        save_dialog.transient(self)
-        save_dialog.grab_set()
+        equipment_map = _equipment_available_map(self.order)
+        for product in self.order.products:
+            row = self.product_progress_table.rowCount()
+            self.product_progress_table.insertRow(row)
+            self.product_progress_table.setItem(row, 0, QtWidgets.QTableWidgetItem(product.product_id))
+            self.product_progress_table.setItem(row, 1, QtWidgets.QTableWidgetItem(product.part_number))
+            progress = _product_progress(product, equipment_map)
+            self.product_progress_table.setItem(row, 2, QtWidgets.QTableWidgetItem(f"{progress:.0%}"))
 
-        ttk.Label(save_dialog, text="保存为:").pack(pady=10)
-        
-        filename_var = tk.StringVar(value=f"{self.order.order_id}.json")
-        ttk.Entry(save_dialog, textvariable=filename_var, width=40).pack(pady=5)
-        
-        ttk.Label(save_dialog, text="(文件将保存在桌面)", font=("", 9), foreground="gray").pack()
+    def _refresh_order_summary(self) -> None:
+        if not self.order:
+            self.order_summary_label.setText("订单: -")
+            return
+        self.order_summary_label.setText(
+            f"订单: {self.order.order_id} | 产品数: {len(self.order.products)} | 设备数: {len(self.order.equipment)}"
+        )
 
-        def do_save():
-            filename = filename_var.get().strip()
-            if not filename:
-                messagebox.showerror("错误", "文件名不能为空")
-                return
-            if not filename.endswith('.json'):
-                filename += '.json'
-            
-            try:
-                data = {
-                    "order_id": self.order.order_id,
-                    "start_dt": self.order.start_dt.isoformat(),
-                    "lathe_ops": self.order.lathe_ops,
-                    "blank_lead_days": self.order.blank_lead_days,
-                    "quantity": self.order.quantity,
-                    "route_mode": self.route_mode,
+    # ------------------------
+    # Serialization
+    # ------------------------
+
+    def _order_to_dict(self, order: Order) -> Dict[str, object]:
+        return {
+            "version": 5,
+            "order_id": order.order_id,
+            "start_dt": order.start_dt.isoformat(),
+            "equipment": [
+                {
+                    "equipment_id": e.equipment_id,
+                    "total_count": e.total_count,
+                    "available_count": e.available_count,
+                }
+                for e in order.equipment
+            ],
+            "employees": order.employees,
+            "products": [
+                {
+                    "product_id": p.product_id,
+                    "part_number": p.part_number,
+                    "quantity": p.quantity,
                     "phases": [
                         {
-                            "name": p.name,
-                            "planned_hours": p.planned_hours,
-                            "done": p.done,
-                            "parallel_group": p.parallel_group
-                        } for p in self.order.phases
+                            "name": ph.name,
+                            "planned_hours": ph.planned_hours,
+                            "done": ph.done,
+                            "parallel_group": ph.parallel_group,
+                            "equipment_id": ph.equipment_id,
+                            "assigned_employee": ph.assigned_employee,
+                        }
+                        for ph in p.phases
                     ],
-                    "events": [
-                        {
-                            "day": e.day.isoformat(),
-                            "hours_lost": e.hours_lost,
-                            "reason": e.reason
-                        } for e in self.order.events
-                    ]
                 }
-                
-                with open(filename, 'w', encoding='utf-8') as f:
-                    json.dump(data, f, ensure_ascii=False, indent=2)
-                
-                save_dialog.destroy()
-                messagebox.showinfo("保存成功", f"订单已保存到 {filename}")
-                self._explain(f"订单已保存到: {filename}")
-            except Exception as e:
-                messagebox.showerror("保存失败", f"保存时出错: {str(e)}")
+                for p in order.products
+            ],
+            "events": [
+                {
+                    "day": e.day.isoformat(),
+                    "hours_lost": e.hours_lost,
+                    "reason": e.reason,
+                }
+                for e in order.events
+            ],
+        }
 
-        btn_frame = ttk.Frame(save_dialog)
-        btn_frame.pack(pady=15)
-        ttk.Button(btn_frame, text="保存", command=do_save).pack(side="left", padx=5)
-        ttk.Button(btn_frame, text="取消", command=save_dialog.destroy).pack(side="left", padx=5)
+    @staticmethod
+    def _order_from_dict(data: Dict[str, object]) -> Order:
+        order_id = data.get("order_id", "O-UNKNOWN")
+        start_dt = datetime.fromisoformat(data.get("start_dt", datetime.now().isoformat()))
 
-    def _load_order(self, show_message=False, filename=None):
-        """从JSON文件加载订单数据"""
-        if filename is None:
-            filename = self.save_file
-            
-        if not os.path.exists(filename):
-            if show_message:
-                messagebox.showinfo("提示", f"没有找到文件: {filename}")
-            return  # 文件不存在
-        
-        try:
-            with open(filename, 'r', encoding='utf-8') as f:
-                data = json.load(f)
-            
-            # 重建订单对象
-            phases = [Phase(
-                name=p["name"],
-                planned_hours=p["planned_hours"],
-                done=p["done"],
-                parallel_group=p.get("parallel_group", 0)  # 兼容旧版本
-            ) for p in data["phases"]]
-            
-            events = [Event(
-                day=date.fromisoformat(e["day"]),
-                hours_lost=e["hours_lost"],
-                reason=e["reason"]
-            ) for e in data["events"]]
-            
-            self.order = Order(
-                order_id=data["order_id"],
-                start_dt=datetime.fromisoformat(data["start_dt"]),
-                phases=phases,
-                events=events,
-                lathe_ops=data["lathe_ops"],
-                blank_lead_days=data["blank_lead_days"],
-                quantity=data.get("quantity", 1)  # 兼容旧版本
+        equipment = [
+            Equipment(
+                equipment_id=e.get("equipment_id", ""),
+                total_count=int(e.get("total_count", 1)),
+                available_count=int(e.get("available_count", 1)),
             )
-            
-            # 更新UI
-            self.route_mode = data.get("route_mode", "with_mold")
-            self.order_id_var.set(data["order_id"])
-            self.lathe_ops_var.set(str(data["lathe_ops"]))
-            self.blank_days_var.set(str(data["blank_lead_days"]))
-            self.quantity_var.set(str(data.get("quantity", 1)))
-            self.route_var.set(self.route_mode)
-            
-            self._reload_phase_tree()
-            self._reload_event_list()
-            self.refresh_eta()
-            
-            if show_message:
-                messagebox.showinfo("加载成功", f"已成功加载订单: {self.order.order_id}\n数量: {self.order.quantity} 件\n工序数: {len(self.order.phases)}\n事件数: {len(self.order.events)}")
-            self._explain(f"已加载订单: {self.order.order_id} ({self.order.quantity}件)")
-        except Exception as e:
-            error_msg = f"加载订单时出错: {str(e)}"
-            if show_message:
-                messagebox.showerror("加载失败", error_msg)
-            else:
-                print(error_msg)  # 启动时的错误输出到控制台
+            for e in data.get("equipment", [])
+        ]
 
-    def load_order_button(self):
-        """点击加载按钮时调用，显示文件选择对话框"""
-        # 列出所有JSON文件
-        json_files = [f for f in os.listdir('.') if f.endswith('.json')]
-        
-        if not json_files:
-            messagebox.showinfo("提示", "当前目录没有找到JSON订单文件。")
-            return
-        
-        # 创建选择对话框
-        load_dialog = tk.Toplevel(self)
-        load_dialog.title("选择订单文件")
-        load_dialog.geometry("450x400")
-        load_dialog.transient(self)
-        load_dialog.grab_set()
+        employees = list(data.get("employees", []))
 
-        ttk.Label(load_dialog, text="请选择要加载的订单:", font=("", 10, "bold")).pack(pady=10)
-        
-        # 文件列表
-        listbox_frame = ttk.Frame(load_dialog)
-        listbox_frame.pack(fill="both", expand=True, padx=20, pady=10)
-        
-        scrollbar = ttk.Scrollbar(listbox_frame)
-        scrollbar.pack(side="right", fill="y")
-        
-        file_listbox = tk.Listbox(listbox_frame, yscrollcommand=scrollbar.set, font=("", 10))
-        file_listbox.pack(side="left", fill="both", expand=True)
-        scrollbar.config(command=file_listbox.yview)
-        
-        for f in sorted(json_files):
-            file_listbox.insert(tk.END, f)
-        
-        # 显示文件预览
-        preview_label = ttk.Label(load_dialog, text="", foreground="blue", wraplength=400)
-        preview_label.pack(pady=5)
+        products: List[Product] = []
+        if "products" in data:
+            for p in data.get("products", []):
+                phases = [
+                    Phase(
+                        name=ph.get("name", ""),
+                        planned_hours=float(ph.get("planned_hours", 0)),
+                        done=bool(ph.get("done", False)),
+                        parallel_group=int(ph.get("parallel_group", 0)),
+                        equipment_id=ph.get("equipment_id", ""),
+                        assigned_employee=ph.get("assigned_employee", ""),
+                    )
+                    for ph in p.get("phases", [])
+                ]
+                products.append(
+                    Product(
+                        product_id=p.get("product_id", "Product"),
+                        part_number=p.get("part_number", ""),
+                        quantity=int(p.get("quantity", 1)),
+                        phases=phases,
+                    )
+                )
+        elif "phases" in data:
+            # Backward compatibility: old single-product format
+            phases = [
+                Phase(
+                    name=ph.get("name", ""),
+                    planned_hours=float(ph.get("planned_hours", 0)),
+                    done=bool(ph.get("done", False)),
+                    parallel_group=int(ph.get("parallel_group", 0)),
+                    equipment_id=ph.get("equipment_id", ""),
+                )
+                for ph in data.get("phases", [])
+            ]
+            products.append(
+                Product(
+                    product_id="产品1",
+                    part_number=data.get("part_number", ""),
+                    quantity=int(data.get("quantity", 1)),
+                    phases=phases,
+                )
+            )
 
-        def on_select(event):
-            if file_listbox.curselection():
-                filename = file_listbox.get(file_listbox.curselection()[0])
-                try:
-                    with open(filename, 'r', encoding='utf-8') as f:
-                        data = json.load(f)
-                    preview_label.config(text=f"订单: {data.get('order_id', '?')} | 数量: {data.get('quantity', '?')} 件 | 工序: {len(data.get('phases', []))} 个")
-                except:
-                    preview_label.config(text="无法读取文件信息")
+        events = [
+            Event(
+                day=date.fromisoformat(e.get("day")),
+                hours_lost=float(e.get("hours_lost", 0)),
+                reason=e.get("reason", ""),
+            )
+            for e in data.get("events", [])
+            if e.get("day")
+        ]
 
-        file_listbox.bind('<<ListboxSelect>>', on_select)
+        return Order(
+            order_id=order_id,
+            start_dt=start_dt,
+            products=products,
+            events=events,
+            equipment=equipment,
+            employees=employees,
+        )
 
-        def do_load():
-            if not file_listbox.curselection():
-                messagebox.showwarning("未选择", "请先选择一个文件")
-                return
-            filename = file_listbox.get(file_listbox.curselection()[0])
-            load_dialog.destroy()
-            self._load_order(show_message=True, filename=filename)
+    # ------------------------
+    # Global refresh
+    # ------------------------
 
-        btn_frame = ttk.Frame(load_dialog)
-        btn_frame.pack(pady=10)
-        ttk.Button(btn_frame, text="加载", command=do_load).pack(side="left", padx=5)
-        ttk.Button(btn_frame, text="取消", command=load_dialog.destroy).pack(side="left", padx=5)
+    def _refresh_all(self) -> None:
+        self._refresh_equipment_table()
+        self._refresh_employee_list()
+        self._refresh_phase_equipment_combo()
+        self._refresh_phase_employee_combo()
+        self._refresh_products_table()
+        self._refresh_events_table()
+        self._refresh_event_reason_combo()
+        self._refresh_admin_views()
+        self.refresh_eta()
+
 
 if __name__ == "__main__":
-    app = ETAGUI()
-    app.mainloop()
+    app = QtWidgets.QApplication([])
+    window = MainWindow()
+    window.show()
+    app.exec()

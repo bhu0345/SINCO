@@ -1,0 +1,52 @@
+{
+  "version": 4,
+  "order_id": "test001",
+  "start_dt": "2026-01-08T00:00:00",
+  "equipment": [
+    {
+      "equipment_id": "001",
+      "total_count": 3,
+      "available_count": 3
+    },
+    {
+      "equipment_id": "002",
+      "total_count": 4,
+      "available_count": 4
+    }
+  ],
+  "employees": [],
+  "event_reasons": [
+    "员工请假",
+    "设备故障",
+    "停电",
+    "材料短缺",
+    "质量问题",
+    "其他"
+  ],
+  "products": [
+    {
+      "product_id": "a1",
+      "part_number": "dkafds",
+      "quantity": 3,
+      "phases": []
+    },
+    {
+      "product_id": "b2",
+      "part_number": "dkafddsfas",
+      "quantity": 3,
+      "phases": []
+    }
+  ],
+  "events": [
+    {
+      "day": "2026-01-08",
+      "hours_lost": 8.0,
+      "reason": "员工请假"
+    }
+  ],
+  "templates": {
+    "equipment": [],
+    "phases": [],
+    "employees": []
+  }
+}
