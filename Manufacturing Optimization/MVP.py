@@ -235,7 +235,7 @@ def _chinese_locale() -> QtCore.QLocale:
 class MainWindow(QtWidgets.QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("生产交期优化系统 V3.0")
+        self.setWindowTitle("生产交期优化系统 V3.0.1")
         self.resize(1280, 820)
 
         self.locale_cn = _chinese_locale()
@@ -250,6 +250,9 @@ class MainWindow(QtWidgets.QMainWindow):
         self.app_template_path = os.path.join(
             os.path.dirname(os.path.abspath(__file__)), "app_templates.json"
         )
+        self.logo_path = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)), "GUI", "sinco.JPG"
+        )
         self.equipment_templates: List[Equipment] = []
         self.phase_templates: List[Phase] = []
         self.employee_templates: List[str] = []
@@ -258,6 +261,9 @@ class MainWindow(QtWidgets.QMainWindow):
         self._load_app_templates()
         self._ensure_default_templates()
         self.cal = WorkCalendar(self._current_shift_template())
+
+        self._apply_app_font()
+        self._apply_modern_style()
 
         self.stack = QtWidgets.QStackedWidget()
         self.setCentralWidget(self.stack)
@@ -285,9 +291,110 @@ class MainWindow(QtWidgets.QMainWindow):
         if calendar:
             calendar.setLocale(self.locale_cn)
 
+    def _apply_app_font(self) -> None:
+        preferred = [
+            "PingFang SC",
+            "Source Han Sans SC",
+            "Noto Sans CJK SC",
+            "Microsoft YaHei",
+        ]
+        db = QtGui.QFontDatabase()
+        for family in preferred:
+            if family in db.families():
+                app = QtWidgets.QApplication.instance()
+                if app:
+                    app.setFont(QtGui.QFont(family, 10))
+                break
+
+    def _apply_modern_style(self) -> None:
+        self.setStyleSheet(
+            """
+            QMainWindow { background: #f2f6fb; }
+            QFrame#heroCard, QFrame#metricCard { background: #ffffff; border: 1px solid #d8e1ec; border-radius: 12px; }
+            QGroupBox { background: #ffffff; border: 1px solid #d8e1ec; border-radius: 12px; margin-top: 14px; }
+            QGroupBox::title { subcontrol-origin: margin; left: 12px; padding: 0 6px; color: #2a3b4d; font-weight: 600; }
+            QLabel#heroTitle { font-size: 20px; font-weight: 700; color: #1f2d3d; }
+            QLabel#heroSubtitle { color: #5c6f84; }
+            QLabel#metricValue { font-size: 18px; font-weight: 700; color: #0f5e9c; }
+            QLabel#metricLabel { color: #6b7c93; }
+            QPushButton { background: #e8eef5; border: 1px solid #c8d4e2; padding: 6px 12px; border-radius: 6px; }
+            QPushButton#primaryAction { background: #0f5e9c; color: #ffffff; border: none; }
+            QPushButton#dangerAction { background: #c64545; color: #ffffff; border: none; }
+            QLineEdit, QComboBox, QDateEdit, QSpinBox, QDoubleSpinBox {
+                background: #f7f9fb; border: 1px solid #cfd9e6; padding: 4px 6px; border-radius: 6px;
+            }
+            QTableWidget {
+                background: #ffffff; border: 1px solid #d8e1ec; border-radius: 10px; gridline-color: #e1e7ef;
+            }
+            QHeaderView::section {
+                background: #edf2f7; padding: 6px 8px; border: none; color: #2a3b4d; font-weight: 600;
+            }
+            QProgressBar { border: 1px solid #cfd9e6; border-radius: 6px; text-align: center; height: 16px; background: #eef2f7; }
+            QProgressBar::chunk { background: #2f7dd1; border-radius: 6px; }
+            QTabWidget::pane { border: 1px solid #d8e1ec; border-radius: 10px; }
+            QTabBar::tab {
+                background: #eef2f7; padding: 6px 12px; border: 1px solid #d8e1ec; border-bottom: none;
+                border-top-left-radius: 8px; border-top-right-radius: 8px; margin-right: 4px;
+            }
+            QTabBar::tab:selected { background: #ffffff; }
+            """
+        )
+
+    def _load_logo_pixmap(self, label: QtWidgets.QLabel) -> None:
+        if not os.path.exists(self.logo_path):
+            label.setText("SINCO")
+            label.setObjectName("heroTitle")
+            return
+        pixmap = QtGui.QPixmap(self.logo_path)
+        if pixmap.isNull():
+            label.setText("SINCO")
+            label.setObjectName("heroTitle")
+            return
+        scaled = pixmap.scaled(
+            140,
+            60,
+            QtCore.Qt.AspectRatioMode.KeepAspectRatio,
+            QtCore.Qt.TransformationMode.SmoothTransformation,
+        )
+        label.setPixmap(scaled)
+
     def _build_dashboard(self) -> QtWidgets.QWidget:
         page = QtWidgets.QWidget()
         layout = QtWidgets.QVBoxLayout(page)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(12)
+
+        hero = QtWidgets.QFrame()
+        hero.setObjectName("heroCard")
+        hero_layout = QtWidgets.QHBoxLayout(hero)
+        hero_layout.setContentsMargins(16, 12, 16, 12)
+        hero_layout.setSpacing(16)
+
+        self.logo_label = QtWidgets.QLabel()
+        self.logo_label.setMinimumWidth(140)
+        self.logo_label.setAlignment(QtCore.Qt.AlignmentFlag.AlignLeft | QtCore.Qt.AlignmentFlag.AlignVCenter)
+        self._load_logo_pixmap(self.logo_label)
+        hero_layout.addWidget(self.logo_label)
+
+        title_layout = QtWidgets.QVBoxLayout()
+        self.hero_title_label = QtWidgets.QLabel("SINCO 生产交期优化系统")
+        self.hero_title_label.setObjectName("heroTitle")
+        self.hero_subtitle_label = QtWidgets.QLabel("订单、设备、班次与进度一屏掌控")
+        self.hero_subtitle_label.setObjectName("heroSubtitle")
+        title_layout.addWidget(self.hero_title_label)
+        title_layout.addWidget(self.hero_subtitle_label)
+        hero_layout.addLayout(title_layout, 1)
+
+        stats_layout = QtWidgets.QVBoxLayout()
+        self.shift_summary_label = QtWidgets.QLabel("当前班次: -")
+        self.shift_summary_label.setObjectName("metricLabel")
+        self.dashboard_summary_label = QtWidgets.QLabel("产品数: 0 | 设备数: 0")
+        self.dashboard_summary_label.setObjectName("metricLabel")
+        stats_layout.addWidget(self.shift_summary_label)
+        stats_layout.addWidget(self.dashboard_summary_label)
+        hero_layout.addLayout(stats_layout)
+
+        layout.addWidget(hero)
 
         header = QtWidgets.QGroupBox("订单管理")
         header_layout = QtWidgets.QGridLayout(header)
@@ -304,6 +411,7 @@ class MainWindow(QtWidgets.QMainWindow):
         header_layout.addWidget(self.start_date_edit, 0, 3)
 
         self.create_order_btn = QtWidgets.QPushButton("创建订单")
+        self.create_order_btn.setObjectName("primaryAction")
         self.create_order_btn.clicked.connect(self.create_order)
         self.save_order_btn = QtWidgets.QPushButton("保存订单")
         self.save_order_btn.clicked.connect(self.save_order)
@@ -383,12 +491,29 @@ class MainWindow(QtWidgets.QMainWindow):
         )
         progress_layout.addWidget(self.product_progress_table)
 
-        self.eta_label = QtWidgets.QLabel("预计交期: -")
-        self.remaining_label = QtWidgets.QLabel("剩余工时: -")
-        progress_layout.addWidget(self.eta_label)
-        progress_layout.addWidget(self.remaining_label)
+        metrics_card = QtWidgets.QFrame()
+        metrics_card.setObjectName("metricCard")
+        metrics_layout = QtWidgets.QGridLayout(metrics_card)
+        metrics_layout.setContentsMargins(12, 8, 12, 8)
+
+        eta_label = QtWidgets.QLabel("预计交期")
+        eta_label.setObjectName("metricLabel")
+        self.eta_value = QtWidgets.QLabel("-")
+        self.eta_value.setObjectName("metricValue")
+
+        remaining_label = QtWidgets.QLabel("剩余工时")
+        remaining_label.setObjectName("metricLabel")
+        self.remaining_value = QtWidgets.QLabel("-")
+        self.remaining_value.setObjectName("metricValue")
+
+        metrics_layout.addWidget(eta_label, 0, 0)
+        metrics_layout.addWidget(self.eta_value, 1, 0)
+        metrics_layout.addWidget(remaining_label, 0, 1)
+        metrics_layout.addWidget(self.remaining_value, 1, 1)
+        progress_layout.addWidget(metrics_card)
 
         self.refresh_eta_btn = QtWidgets.QPushButton("刷新交期")
+        self.refresh_eta_btn.setObjectName("primaryAction")
         self.refresh_eta_btn.clicked.connect(self.refresh_eta)
         progress_layout.addWidget(self.refresh_eta_btn)
 
@@ -403,6 +528,7 @@ class MainWindow(QtWidgets.QMainWindow):
     def _build_detail_page(self) -> QtWidgets.QWidget:
         page = QtWidgets.QWidget()
         layout = QtWidgets.QVBoxLayout(page)
+        layout.setContentsMargins(16, 16, 16, 16)
 
         top_bar = QtWidgets.QHBoxLayout()
         self.back_btn = QtWidgets.QPushButton("返回主界面")
@@ -410,6 +536,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.order_summary_label = QtWidgets.QLabel("订单: -")
         self.detail_eta_label = QtWidgets.QLabel("预计交期: -")
         self.detail_progress_label = QtWidgets.QLabel("总体进度: 0%")
+        self.detail_eta_label.setObjectName("metricValue")
+        self.detail_progress_label.setObjectName("metricLabel")
 
         top_bar.addWidget(self.back_btn)
         top_bar.addWidget(self.order_summary_label)
@@ -614,6 +742,7 @@ class MainWindow(QtWidgets.QMainWindow):
     def _build_admin_page(self) -> QtWidgets.QWidget:
         page = QtWidgets.QWidget()
         layout = QtWidgets.QVBoxLayout(page)
+        layout.setContentsMargins(16, 16, 16, 16)
 
         top_bar = QtWidgets.QHBoxLayout()
         self.admin_back_btn = QtWidgets.QPushButton("返回主界面")
@@ -1176,6 +1305,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.cal.shift_template = self._current_shift_template()
         if hasattr(self, "admin_shift_active_label"):
             self._update_active_shift_label()
+        self._refresh_dashboard_summary()
         self.refresh_eta()
 
     def _maybe_import_templates_from_order(self, data: Dict[str, object]) -> None:
@@ -2071,15 +2201,15 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def refresh_eta(self) -> None:
         if not self.order:
-            self.eta_label.setText("预计交期: -")
-            self.remaining_label.setText("剩余工时: -")
+            self.eta_value.setText("-")
+            self.remaining_value.setText("-")
             self.detail_eta_label.setText("预计交期: -")
             self.detail_progress_label.setText("总体进度: 0%")
             self.overall_progress.setValue(0)
             return
         if not self.cal.shift_template:
-            self.eta_label.setText("预计交期: 请先设置班次模板")
-            self.remaining_label.setText("剩余工时: -")
+            self.eta_value.setText("请先设置班次模板")
+            self.remaining_value.setText("-")
             self.detail_eta_label.setText("预计交期: 请先设置班次模板")
             self.detail_progress_label.setText("总体进度: -")
             self.overall_progress.setValue(0)
@@ -2092,8 +2222,8 @@ class MainWindow(QtWidgets.QMainWindow):
 
         eta_dt: datetime = result["eta_dt"]
         remaining_hours: float = result["remaining_hours"]
-        self.eta_label.setText(f"预计交期: {eta_dt.strftime('%Y-%m-%d %H:%M')}")
-        self.remaining_label.setText(f"剩余工时: {remaining_hours:g}h")
+        self.eta_value.setText(eta_dt.strftime("%Y-%m-%d %H:%M"))
+        self.remaining_value.setText(f"{remaining_hours:g}h")
         self.detail_eta_label.setText(f"预计交期: {eta_dt.strftime('%Y-%m-%d %H:%M')}")
 
         equipment_map = _equipment_available_map(self.order)
@@ -2128,10 +2258,24 @@ class MainWindow(QtWidgets.QMainWindow):
     def _refresh_order_summary(self) -> None:
         if not self.order:
             self.order_summary_label.setText("订单: -")
+            self._refresh_dashboard_summary()
             return
         self.order_summary_label.setText(
             f"订单: {self.order.order_id} | 产品数: {len(self.order.products)} | 设备数: {len(self.order.equipment)}"
         )
+        self._refresh_dashboard_summary()
+
+    def _refresh_dashboard_summary(self) -> None:
+        shift_name = self.active_shift_template_name or "-"
+        if hasattr(self, "shift_summary_label"):
+            self.shift_summary_label.setText(f"当前班次: {shift_name}")
+        if hasattr(self, "dashboard_summary_label"):
+            if not self.order:
+                self.dashboard_summary_label.setText("产品数: 0 | 设备数: 0")
+            else:
+                self.dashboard_summary_label.setText(
+                    f"产品数: {len(self.order.products)} | 设备数: {len(self.order.equipment)}"
+                )
 
     # ------------------------
     # Serialization
