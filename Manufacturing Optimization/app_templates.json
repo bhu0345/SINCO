@@ -8,20 +8,44 @@
     "质量问题",
     "其他"
   ],
+  "equipment_categories": [
+    "车床",
+    "加工中心",
+    "检验设备",
+    "辅助设备"
+  ],
+  "defect_categories": [
+    "设备",
+    "原材料",
+    "员工"
+  ],
+  "users": [
+    {
+      "username": "admin",
+      "password": "123456"
+    },
+    {
+      "username": "hjz",
+      "password": "526531"
+    }
+  ],
   "templates": {
     "equipment": [
       {
         "equipment_id": "001",
+        "category": "",
         "total_count": 1,
         "available_count": 1
       },
       {
         "equipment_id": "002",
+        "category": "",
         "total_count": 1,
         "available_count": 1
       },
       {
         "equipment_id": "003",
+        "category": "",
         "total_count": 1,
         "available_count": 0
       }
@@ -30,7 +54,7 @@
     "employees": [],
     "shifts": [
       {
-        "name": "周六两班",
+        "name": "班次1",
         "week_plan": [
           {
             "shift_count": 1,
@@ -63,6 +87,6 @@
         ]
       }
     ],
-    "active_shift": "周六两班"
+    "active_shift": "班次1"
   }
 }
