@@ -8,7 +8,7 @@ from PySide6 import QtCore, QtGui, QtWidgets
 
 QT_BINDING = "PySide6"
 ADMIN_PASSWORD = "admin123"
-ADMIN_SECRET_KEY = "change-me"
+ADMIN_SECRET_KEY = "s3cr3t_k3y"
 
 
 # ----------------------------
