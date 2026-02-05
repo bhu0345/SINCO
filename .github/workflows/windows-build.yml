@@ -35,5 +35,5 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: 生产交期预测系统-windows
+          name: production-system-windows
           path: "Manufacturing Optimization/dist/生产交期预测系统/"
