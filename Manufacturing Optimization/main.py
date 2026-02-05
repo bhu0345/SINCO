@@ -1,339 +1,45 @@
 import json
 import os
-from dataclasses import dataclass, field
 from datetime import datetime, timedelta, date
 from typing import List, Dict, Optional
 from PySide6 import QtCore, QtGui, QtWidgets
+
+from modules.models import (
+    Phase,
+    Product,
+    Equipment,
+    ShiftDayPlan,
+    ShiftTemplate,
+    Event,
+    CapacityAdjustment,
+    DefectRecord,
+    LogEntry,
+    MemoEntry,
+    Order,
+    UserAccount,
+)
+from modules.delegates import ComboBoxDelegate, SpinBoxDelegate
+from modules.scheduler import (
+    WorkCalendar,
+    _equipment_available_map_from_list,
+    _equipment_available_map,
+    _normalize_equipment_ids,
+    _split_equipment_ids,
+    _format_equipment_ids,
+    _phase_effective_hours,
+    _phase_total_hours,
+    _phase_completion_ratio,
+    _product_remaining_hours,
+    _product_progress,
+    _product_quantity_progress,
+    compute_eta,
+)
+from modules.data_io import order_to_dict, order_from_dict
 
 
 QT_BINDING = "PySide6"
 ADMIN_PASSWORD = "admin123"
 ADMIN_SECRET_KEY = "s3cr3t_k3y"
-
-
-# ----------------------------
-# Data models
-# ----------------------------
-
-
-@dataclass
-class Phase:
-    name: str
-    planned_hours: float
-    completed_hours: float = 0.0
-    parallel_group: int = 0
-    equipment_id: str = ""
-    assigned_employee: str = ""
-
-
-@dataclass
-class Product:
-    product_id: str
-    part_number: str = ""
-    quantity: int = 1
-    produced_qty: int = 0
-    unit_weight_g: float = 0.0
-    phases: List[Phase] = field(default_factory=list)
-
-
-@dataclass
-class Equipment:
-    equipment_id: str
-    category: str = ""
-    total_count: int = 1
-    available_count: int = 1
-    shift_template_name: str = ""
-
-
-@dataclass
-class ShiftDayPlan:
-    shift_count: int = 1
-    hours_per_shift: float = 8.0
-
-    def total_hours(self) -> float:
-        return max(0, self.shift_count) * max(0.0, self.hours_per_shift)
-
-
-@dataclass
-class ShiftTemplate:
-    name: str
-    week_plan: List[ShiftDayPlan] = field(default_factory=list)
-
-    def hours_for_weekday(self, weekday: int) -> float:
-        if weekday < 0:
-            return 0.0
-        if len(self.week_plan) < 7:
-            return 0.0
-        if weekday >= len(self.week_plan):
-            return 0.0
-        return self.week_plan[weekday].total_hours()
-
-
-@dataclass
-class Event:
-    day: date
-    hours_lost: float
-    reason: str
-    remark: str = ""
-
-
-@dataclass
-class CapacityAdjustment:
-    day: date
-    extra_hours: float
-    reason: str
-    equipment_ids: List[str] = field(default_factory=list)
-
-
-@dataclass
-class DefectRecord:
-    product_id: str
-    count: int
-    category: str
-    detail: str = ""
-    timestamp: datetime = field(default_factory=datetime.now)
-
-
-@dataclass
-class LogEntry:
-    timestamp: datetime
-    user: str
-    content: str
-    order_id: str = ""
-
-
-@dataclass
-class MemoEntry:
-    day: date
-    user: str
-    content: str
-
-
-@dataclass
-class Order:
-    order_id: str
-    start_dt: datetime
-    order_date: date = field(default_factory=date.today)
-    customer_code: str = ""
-    shipping_method: str = ""
-    due_date: date = field(default_factory=date.today)
-    products: List[Product] = field(default_factory=list)
-    events: List[Event] = field(default_factory=list)
-    adjustments: List[CapacityAdjustment] = field(default_factory=list)
-    defects: List[DefectRecord] = field(default_factory=list)
-    equipment: List[Equipment] = field(default_factory=list)
-    employees: List[str] = field(default_factory=list)
-    logs: List[LogEntry] = field(default_factory=list)
-
-
-@dataclass
-class UserAccount:
-    username: str
-    password: str
-
-
-# ----------------------------
-# Scheduling / ETA computation
-# ----------------------------
-
-class WorkCalendar:
-    def __init__(self, shift_template: Optional[ShiftTemplate] = None):
-        self.shift_template = shift_template
-
-    def capacity_for_day(self, d: date) -> float:
-        if not self.shift_template:
-            return 0.0
-        return self.shift_template.hours_for_weekday(d.weekday())
-
-
-def _equipment_available_map_from_list(equipment: List[Equipment]) -> Dict[str, int]:
-    result: Dict[str, int] = {}
-    for eq in equipment:
-        if not eq.equipment_id:
-            continue
-        result[eq.equipment_id] = max(0, int(eq.available_count))
-    return result
-
-
-def _equipment_available_map(order: Order) -> Dict[str, int]:
-    return _equipment_available_map_from_list(order.equipment)
-
-
-def _normalize_equipment_ids(items: List[str]) -> List[str]:
-    seen = set()
-    result: List[str] = []
-    for item in items:
-        text = (item or "").strip()
-        if not text or text in ("-", "无需设备"):
-            continue
-        if text in seen:
-            continue
-        seen.add(text)
-        result.append(text)
-    return result
-
-
-def _split_equipment_ids(text: str) -> List[str]:
-    if not text:
-        return []
-    if text.strip() in ("-", "无需设备"):
-        return []
-    return _normalize_equipment_ids(text.split(","))
-
-
-def _format_equipment_ids(ids: List[str]) -> str:
-    return ",".join(_normalize_equipment_ids(ids))
-
-
-def _phase_effective_hours(phase: Phase, quantity: int, equipment_map: Dict[str, int]) -> float:
-    base = max(0.0, float(phase.planned_hours))
-    hours = base
-    equipment_ids = _split_equipment_ids(phase.equipment_id)
-    if equipment_ids:
-        available = sum(max(0, equipment_map.get(eq_id, 0)) for eq_id in equipment_ids)
-        if available > 0:
-            hours = hours / available
-    return hours
-
-
-def _phase_total_hours(phase: Phase, quantity: int) -> float:
-    return max(0.0, float(phase.planned_hours))
-
-
-def _phase_completion_ratio(phase: Phase, quantity: int) -> float:
-    total = _phase_total_hours(phase, quantity)
-    if total <= 0:
-        return 0.0
-    completed = max(0.0, float(phase.completed_hours))
-    completed = min(completed, total)
-    return completed / total
-
-
-def _product_remaining_hours(product: Product, equipment_map: Dict[str, int]) -> float:
-    total = 0.0
-    parallel_groups: Dict[int, List[float]] = {}
-    for phase in product.phases:
-        hours = _phase_effective_hours(phase, product.quantity, equipment_map)
-        ratio = _phase_completion_ratio(phase, product.quantity)
-        remaining = hours * (1.0 - ratio)
-        if phase.parallel_group > 0:
-            parallel_groups.setdefault(phase.parallel_group, []).append(remaining)
-        else:
-            total += remaining
-    for group_hours in parallel_groups.values():
-        total += max(group_hours)
-    return total
-
-
-def _product_progress(product: Product, equipment_map: Dict[str, int]) -> float:
-    total = 0.0
-    done = 0.0
-    for phase in product.phases:
-        hours = _phase_effective_hours(phase, product.quantity, equipment_map)
-        total += hours
-        ratio = _phase_completion_ratio(phase, product.quantity)
-        done += hours * ratio
-    if total <= 0:
-        return 0.0
-    return min(done / total, 1.0)
-
-
-def _product_quantity_progress(product: Product) -> float:
-    qty = max(int(product.quantity), 0)
-    if qty <= 0:
-        return 0.0
-    produced = max(0, int(product.produced_qty))
-    if produced > qty:
-        produced = qty
-    return produced / qty
-
-
-def compute_eta(order: Order, cal: WorkCalendar) -> Dict[str, object]:
-    equipment_map = _equipment_available_map(order)
-    remaining_hours = sum(_product_remaining_hours(p, equipment_map) for p in order.products)
-
-    lost_map: Dict[date, float] = {}
-    reason_map: Dict[date, List[str]] = {}
-    for ev in order.events:
-        lost_map[ev.day] = lost_map.get(ev.day, 0.0) + ev.hours_lost
-        reason_map.setdefault(ev.day, []).append(f"{ev.reason}(-{ev.hours_lost:g}h)")
-
-    extra_map: Dict[date, float] = {}
-    extra_reason_map: Dict[date, List[str]] = {}
-    for adj in order.adjustments:
-        equipment_count = len(adj.equipment_ids) if adj.equipment_ids else 1
-        extra_total = adj.extra_hours * max(equipment_count, 1)
-        extra_map[adj.day] = extra_map.get(adj.day, 0.0) + extra_total
-        eq_text = ""
-        if adj.equipment_ids:
-            eq_text = f"设备:{','.join(adj.equipment_ids)} "
-        label = (
-            f"{eq_text}{adj.reason}(+{adj.extra_hours:g}h)"
-            if adj.reason
-            else f"{eq_text}+{adj.extra_hours:g}h"
-        )
-        extra_reason_map.setdefault(adj.day, []).append(label.strip())
-
-    explanation: List[str] = []
-    if order.products:
-        explanation.append("Product workload summary:")
-        for p in order.products:
-            hours = _product_remaining_hours(p, equipment_map)
-            explanation.append(
-                f"- {p.product_id} (PN={p.part_number or '-'} qty={p.quantity}): {hours:g}h"
-            )
-        explanation.append("")
-
-    if remaining_hours <= 0:
-        return {
-            "eta_dt": order.start_dt,
-            "remaining_hours": 0.0,
-            "daily_capacity_map": {},
-            "explanation": explanation + ["All phases completed. ETA equals start time."]
-        }
-
-    current_day = order.start_dt.date()
-    hours_left = remaining_hours
-    daily_capacity_map: Dict[date, float] = {}
-
-    for _ in range(3650):
-        base_cap = cal.capacity_for_day(current_day)
-        lost = lost_map.get(current_day, 0.0)
-        extra = extra_map.get(current_day, 0.0)
-        cap = max(base_cap - lost + extra, 0.0)
-
-        if base_cap > 0 or extra > 0 or lost > 0:
-            daily_capacity_map[current_day] = cap
-
-            if lost > 0 or extra > 0:
-                parts: List[str] = []
-                if lost > 0:
-                    parts.append(f"- {lost:g}h")
-                if extra > 0:
-                    parts.append(f"+ {extra:g}h")
-                change_text = " ".join(parts) if parts else ""
-                reasons = reason_map.get(current_day, []) + extra_reason_map.get(current_day, [])
-                explanation.append(
-                    f"{current_day.isoformat()}: capacity {base_cap:g}h "
-                    f"{change_text} "
-                    f"=> {cap:g}h "
-                    f"({', '.join(reasons)})"
-                )
-
-            if cap > 0:
-                if hours_left <= cap:
-                    finish_time = datetime.combine(current_day, datetime.min.time()).replace(hour=9, minute=0)
-                    finish_time += timedelta(hours=hours_left)
-                    return {
-                        "eta_dt": finish_time,
-                        "remaining_hours": remaining_hours,
-                        "daily_capacity_map": daily_capacity_map,
-                        "explanation": explanation or ["No blocking events."]
-                    }
-                hours_left -= cap
-        current_day = current_day + timedelta(days=1)
-
-    raise RuntimeError("ETA computation exceeded safe bounds.")
 
 
 # ----------------------------
@@ -354,53 +60,6 @@ def _chinese_locale() -> QtCore.QLocale:
         return QtCore.QLocale(QtCore.QLocale.Language.Chinese, QtCore.QLocale.Country.China)
     except AttributeError:
         return QtCore.QLocale(QtCore.QLocale.Chinese, QtCore.QLocale.China)
-
-
-class ComboBoxDelegate(QtWidgets.QStyledItemDelegate):
-    def __init__(self, items_provider, parent: Optional[QtWidgets.QWidget] = None):
-        super().__init__(parent)
-        self.items_provider = items_provider
-
-    def createEditor(self, parent, option, index):
-        combo = QtWidgets.QComboBox(parent)
-        items = self.items_provider() if self.items_provider else []
-        combo.addItems(items)
-        combo.setEditable(False)
-        return combo
-
-    def setEditorData(self, editor, index):
-        value = index.model().data(index, QtCore.Qt.ItemDataRole.EditRole) or ""
-        editor.setCurrentText(str(value))
-
-    def setModelData(self, editor, model, index):
-        model.setData(index, editor.currentText(), QtCore.Qt.ItemDataRole.EditRole)
-
-
-class SpinBoxDelegate(QtWidgets.QStyledItemDelegate):
-    def __init__(
-        self,
-        minimum: int = 0,
-        maximum: int = 9999,
-        parent: Optional[QtWidgets.QWidget] = None,
-    ):
-        super().__init__(parent)
-        self.minimum = minimum
-        self.maximum = maximum
-
-    def createEditor(self, parent, option, index):
-        spin = QtWidgets.QSpinBox(parent)
-        spin.setRange(self.minimum, self.maximum)
-        return spin
-
-    def setEditorData(self, editor, index):
-        value = index.model().data(index, QtCore.Qt.ItemDataRole.EditRole)
-        try:
-            editor.setValue(int(value))
-        except (TypeError, ValueError):
-            editor.setValue(self.minimum)
-
-    def setModelData(self, editor, model, index):
-        model.setData(index, str(editor.value()), QtCore.Qt.ItemDataRole.EditRole)
 
 
 class MainWindow(QtWidgets.QMainWindow):
@@ -6330,251 +5989,11 @@ class MainWindow(QtWidgets.QMainWindow):
         }
 
     def _order_to_dict(self, order: Order, include_equipment: bool = True) -> Dict[str, object]:
-        data: Dict[str, object] = {
-            "version": 12,
-            "order_id": order.order_id,
-            "start_dt": order.start_dt.isoformat(),
-            "order_date": order.order_date.isoformat(),
-            "customer_code": order.customer_code,
-            "shipping_method": order.shipping_method,
-            "due_date": order.due_date.isoformat(),
-            "employees": order.employees,
-            "products": [
-                {
-                    "product_id": p.product_id,
-                    "part_number": p.part_number,
-                    "quantity": p.quantity,
-                    "produced_qty": p.produced_qty,
-                    "unit_weight_g": p.unit_weight_g,
-                    "phases": [
-                        {
-                            "name": ph.name,
-                            "planned_hours": ph.planned_hours,
-                            "completed_hours": ph.completed_hours,
-                            "parallel_group": ph.parallel_group,
-                            "equipment_id": ph.equipment_id,
-                            "assigned_employee": ph.assigned_employee,
-                        }
-                        for ph in p.phases
-                    ],
-                }
-                for p in order.products
-            ],
-            "events": [
-                {
-                    "day": e.day.isoformat(),
-                    "hours_lost": e.hours_lost,
-                    "reason": e.reason,
-                    "remark": e.remark,
-                }
-                for e in order.events
-            ],
-            "capacity_adjustments": [
-                {
-                    "day": a.day.isoformat(),
-                    "extra_hours": a.extra_hours,
-                    "reason": a.reason,
-                    "equipment_ids": a.equipment_ids,
-                }
-                for a in order.adjustments
-            ],
-            "defects": [
-                {
-                    "product_id": d.product_id,
-                    "count": d.count,
-                    "category": d.category,
-                    "detail": d.detail,
-                    "timestamp": d.timestamp.isoformat(),
-                }
-                for d in order.defects
-            ],
-        }
-        if include_equipment:
-            data["equipment"] = [
-                {
-                    "equipment_id": e.equipment_id,
-                    "category": e.category,
-                    "total_count": e.total_count,
-                    "available_count": e.available_count,
-                    "shift_template_name": e.shift_template_name,
-                }
-                for e in order.equipment
-            ]
-        return data
+        return order_to_dict(order, include_equipment=include_equipment)
 
     @staticmethod
     def _order_from_dict(data: Dict[str, object]) -> Order:
-        version = int(data.get("version", 0) or 0)
-        per_unit_hours = version < 11
-        order_id = data.get("order_id", "O-UNKNOWN")
-        start_dt = datetime.fromisoformat(data.get("start_dt", datetime.now().isoformat()))
-        order_date_raw = data.get("order_date", "")
-        if order_date_raw:
-            try:
-                order_date_val = date.fromisoformat(order_date_raw)
-            except Exception:
-                order_date_val = start_dt.date()
-        else:
-            order_date_val = start_dt.date()
-        due_date_raw = data.get("due_date", "")
-        if due_date_raw:
-            try:
-                due_date_val = date.fromisoformat(due_date_raw)
-            except Exception:
-                due_date_val = order_date_val
-        else:
-            due_date_val = order_date_val
-        customer_code = data.get("customer_code", "")
-        shipping_method = data.get("shipping_method", "")
-
-        equipment = [
-            Equipment(
-                equipment_id=e.get("equipment_id", ""),
-                category=e.get("category", ""),
-                total_count=int(e.get("total_count", 1)),
-                available_count=int(e.get("available_count", 1)),
-                shift_template_name=e.get("shift_template_name", ""),
-            )
-            for e in data.get("equipment", [])
-        ]
-
-        employees = list(data.get("employees", []))
-
-        products: List[Product] = []
-        if "products" in data:
-            for p in data.get("products", []):
-                quantity = int(p.get("quantity", 1))
-                produced_qty = int(p.get("produced_qty", 0))
-                if quantity < 0:
-                    quantity = 0
-                if produced_qty < 0:
-                    produced_qty = 0
-                if produced_qty > quantity:
-                    produced_qty = quantity
-                unit_weight_g = float(p.get("unit_weight_g", 0.0))
-                phases = []
-                for ph in p.get("phases", []):
-                    planned_hours = float(ph.get("planned_hours", 0))
-                    if per_unit_hours:
-                        planned_hours = planned_hours * max(quantity, 1)
-                    completed = ph.get("completed_hours", None)
-                    if completed is None:
-                        completed = planned_hours if ph.get("done", False) else 0.0
-                    phases.append(
-                        Phase(
-                            name=ph.get("name", ""),
-                            planned_hours=planned_hours,
-                            completed_hours=float(completed),
-                            parallel_group=int(ph.get("parallel_group", 0)),
-                            equipment_id=ph.get("equipment_id", ""),
-                            assigned_employee=ph.get("assigned_employee", ""),
-                        )
-                    )
-                products.append(
-                    Product(
-                        product_id=p.get("product_id", "Product"),
-                        part_number=p.get("part_number", ""),
-                        quantity=quantity,
-                        produced_qty=produced_qty,
-                        unit_weight_g=unit_weight_g,
-                        phases=phases,
-                    )
-                )
-        elif "phases" in data:
-            # Backward compatibility: old single-product format
-            quantity = int(data.get("quantity", 1))
-            if quantity < 0:
-                quantity = 0
-            phases = []
-            for ph in data.get("phases", []):
-                planned_hours = float(ph.get("planned_hours", 0))
-                if per_unit_hours:
-                    planned_hours = planned_hours * max(quantity, 1)
-                completed = ph.get("completed_hours", None)
-                if completed is None:
-                    completed = planned_hours if ph.get("done", False) else 0.0
-                phases.append(
-                    Phase(
-                        name=ph.get("name", ""),
-                        planned_hours=planned_hours,
-                        completed_hours=float(completed),
-                        parallel_group=int(ph.get("parallel_group", 0)),
-                        equipment_id=ph.get("equipment_id", ""),
-                    )
-                )
-            products.append(
-                Product(
-                    product_id="产品1",
-                    part_number=data.get("part_number", ""),
-                    quantity=quantity,
-                    produced_qty=0,
-                    unit_weight_g=float(data.get("unit_weight_g", 0.0)),
-                    phases=phases,
-                )
-            )
-
-        events = [
-            Event(
-                day=date.fromisoformat(e.get("day")),
-                hours_lost=float(e.get("hours_lost", 0)),
-                reason=e.get("reason", ""),
-                remark=e.get("remark", ""),
-            )
-            for e in data.get("events", [])
-            if e.get("day")
-        ]
-
-        adjustments = [
-            CapacityAdjustment(
-                day=date.fromisoformat(a.get("day")),
-                extra_hours=float(a.get("extra_hours", 0)),
-                reason=a.get("reason", ""),
-                equipment_ids=list(a.get("equipment_ids", [])),
-            )
-            for a in data.get("capacity_adjustments", [])
-            if a.get("day")
-        ]
-
-        defects = [
-            DefectRecord(
-                product_id=d.get("product_id", ""),
-                count=int(d.get("count", 0)),
-                category=d.get("category", ""),
-                detail=d.get("detail", ""),
-                timestamp=datetime.fromisoformat(d.get("timestamp"))
-                if d.get("timestamp")
-                else datetime.now(),
-            )
-            for d in data.get("defects", [])
-        ]
-
-        logs = [
-            LogEntry(
-                timestamp=datetime.fromisoformat(l.get("timestamp"))
-                if l.get("timestamp")
-                else datetime.now(),
-                user=l.get("user", ""),
-                content=l.get("content", ""),
-                order_id=l.get("order_id", ""),
-            )
-            for l in data.get("logs", [])
-        ]
-
-        return Order(
-            order_id=order_id,
-            start_dt=start_dt,
-            order_date=order_date_val,
-            customer_code=customer_code,
-            shipping_method=shipping_method,
-            due_date=due_date_val,
-            products=products,
-            events=events,
-            adjustments=adjustments,
-            defects=defects,
-            equipment=equipment,
-            employees=employees,
-            logs=logs,
-        )
+        return order_from_dict(data)
 
     # ------------------------
     # Global refresh
@@ -6600,8 +6019,12 @@ class MainWindow(QtWidgets.QMainWindow):
         self.refresh_eta()
 
 
-if __name__ == "__main__":
+def main() -> None:
     app = QtWidgets.QApplication([])
     window = MainWindow()
     window.show()
     app.exec()
+
+
+if __name__ == "__main__":
+    main()

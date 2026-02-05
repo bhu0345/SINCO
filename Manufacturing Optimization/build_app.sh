@@ -28,7 +28,7 @@ pyinstaller --name="生产交期预测系统" \
     --windowed \
     --onedir \
     --clean \
-    MVP.py
+    main.py
 
 echo ""
 echo "================================"

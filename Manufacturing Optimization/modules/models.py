@@ -1,9 +1,3 @@
-# -*- coding: utf-8 -*-
-"""
-生产交期优化系统 - 数据模型
-Manufacturing Optimization System - Data Models
-"""
-
 from dataclasses import dataclass, field
 from datetime import datetime, date
 from typing import List
@@ -11,7 +5,6 @@ from typing import List
 
 @dataclass
 class Phase:
-    """工序数据模型"""
     name: str
     planned_hours: float
     completed_hours: float = 0.0
@@ -22,7 +15,6 @@ class Phase:
 
 @dataclass
 class Product:
-    """产品数据模型"""
     product_id: str
     part_number: str = ""
     quantity: int = 1
@@ -33,7 +25,6 @@ class Product:
 
 @dataclass
 class Equipment:
-    """设备数据模型"""
     equipment_id: str
     category: str = ""
     total_count: int = 1
@@ -43,7 +34,6 @@ class Equipment:
 
 @dataclass
 class ShiftDayPlan:
-    """班次日计划"""
     shift_count: int = 1
     hours_per_shift: float = 8.0
 
@@ -53,7 +43,6 @@ class ShiftDayPlan:
 
 @dataclass
 class ShiftTemplate:
-    """班次模板"""
     name: str
     week_plan: List[ShiftDayPlan] = field(default_factory=list)
 
@@ -69,7 +58,6 @@ class ShiftTemplate:
 
 @dataclass
 class Event:
-    """事件（损失工时）"""
     day: date
     hours_lost: float
     reason: str
@@ -78,7 +66,6 @@ class Event:
 
 @dataclass
 class CapacityAdjustment:
-    """产能调整（加班）"""
     day: date
     extra_hours: float
     reason: str
@@ -87,7 +74,6 @@ class CapacityAdjustment:
 
 @dataclass
 class DefectRecord:
-    """不合格品记录"""
     product_id: str
     count: int
     category: str
@@ -97,7 +83,6 @@ class DefectRecord:
 
 @dataclass
 class LogEntry:
-    """日志条目"""
     timestamp: datetime
     user: str
     content: str
@@ -106,7 +91,6 @@ class LogEntry:
 
 @dataclass
 class MemoEntry:
-    """备忘录条目"""
     day: date
     user: str
     content: str
@@ -114,7 +98,6 @@ class MemoEntry:
 
 @dataclass
 class Order:
-    """订单数据模型"""
     order_id: str
     start_dt: datetime
     order_date: date = field(default_factory=date.today)
@@ -132,6 +115,5 @@ class Order:
 
 @dataclass
 class UserAccount:
-    """用户账户"""
     username: str
     password: str

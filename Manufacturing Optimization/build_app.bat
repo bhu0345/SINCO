@@ -18,7 +18,7 @@ echo 开始打包应用...
 echo.
 
 REM 打包为单个应用程序
-pyinstaller --name="生产交期预测系统" --windowed --onedir --clean MVP.py
+pyinstaller --name="生产交期预测系统" --windowed --onedir --clean main.py
 
 echo.
 echo ================================

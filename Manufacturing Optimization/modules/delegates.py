@@ -1,17 +1,9 @@
-# -*- coding: utf-8 -*-
-"""
-生产交期优化系统 - Qt委托
-Manufacturing Optimization System - Qt Delegates
-"""
-
-from typing import Optional, Callable, List
+from typing import Optional
 from PySide6 import QtCore, QtWidgets
 
 
 class ComboBoxDelegate(QtWidgets.QStyledItemDelegate):
-    """下拉框委托，用于表格单元格编辑"""
-    
-    def __init__(self, items_provider: Callable[[], List[str]], parent: Optional[QtWidgets.QWidget] = None):
+    def __init__(self, items_provider, parent: Optional[QtWidgets.QWidget] = None):
         super().__init__(parent)
         self.items_provider = items_provider
 
@@ -31,8 +23,6 @@ class ComboBoxDelegate(QtWidgets.QStyledItemDelegate):
 
 
 class SpinBoxDelegate(QtWidgets.QStyledItemDelegate):
-    """数字输入框委托，用于表格单元格编辑"""
-    
     def __init__(
         self,
         minimum: int = 0,

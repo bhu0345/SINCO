@@ -2,7 +2,7 @@
 
 
 a = Analysis(
-    ['MVP.py'],
+    ['main.py'],
     pathex=[],
     binaries=[],
     datas=[],
