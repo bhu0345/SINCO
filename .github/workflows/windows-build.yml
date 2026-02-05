@@ -30,7 +30,7 @@ jobs:
 
       - name: Build with PyInstaller
         run: |
-          pyinstaller --name="生产交期预测系统" --windowed --onedir --clean main.py
+          pyinstaller --name="生产交期预测系统" --windowed --onedir --clean -y main.py
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
