@@ -19,6 +19,15 @@
     "原材料",
     "员工"
   ],
+  "customer_codes": [
+    "SWI",
+    "SCH",
+    "HYD"
+  ],
+  "shipping_methods": [
+    "空运",
+    "海运"
+  ],
   "users": [
     {
       "username": "admin",
@@ -32,48 +41,223 @@
   "templates": {
     "equipment": [
       {
-        "equipment_id": "001",
-        "category": "",
+        "equipment_id": "C001",
+        "category": "车床",
         "total_count": 1,
-        "available_count": 1
+        "available_count": 1,
+        "shift_template_name": "班次1"
       },
       {
-        "equipment_id": "002",
-        "category": "",
+        "equipment_id": "C002",
+        "category": "车床",
         "total_count": 1,
-        "available_count": 1
+        "available_count": 1,
+        "shift_template_name": ""
       },
       {
-        "equipment_id": "003",
-        "category": "",
+        "equipment_id": "C003",
+        "category": "车床",
         "total_count": 1,
-        "available_count": 0
+        "available_count": 1,
+        "shift_template_name": ""
+      },
+      {
+        "equipment_id": "C004",
+        "category": "车床",
+        "total_count": 1,
+        "available_count": 1,
+        "shift_template_name": ""
+      },
+      {
+        "equipment_id": "C005",
+        "category": "车床",
+        "total_count": 1,
+        "available_count": 1,
+        "shift_template_name": ""
+      },
+      {
+        "equipment_id": "C006",
+        "category": "车床",
+        "total_count": 1,
+        "available_count": 1,
+        "shift_template_name": ""
+      },
+      {
+        "equipment_id": "C007",
+        "category": "车床",
+        "total_count": 1,
+        "available_count": 1,
+        "shift_template_name": ""
+      },
+      {
+        "equipment_id": "C008",
+        "category": "车床",
+        "total_count": 1,
+        "available_count": 1,
+        "shift_template_name": ""
+      },
+      {
+        "equipment_id": "C009",
+        "category": "车床",
+        "total_count": 1,
+        "available_count": 1,
+        "shift_template_name": ""
+      },
+      {
+        "equipment_id": "M001",
+        "category": "加工中心",
+        "total_count": 1,
+        "available_count": 1,
+        "shift_template_name": ""
+      },
+      {
+        "equipment_id": "M002",
+        "category": "加工中心",
+        "total_count": 1,
+        "available_count": 1,
+        "shift_template_name": ""
+      },
+      {
+        "equipment_id": "M003",
+        "category": "加工中心",
+        "total_count": 1,
+        "available_count": 1,
+        "shift_template_name": ""
+      },
+      {
+        "equipment_id": "M004",
+        "category": "加工中心",
+        "total_count": 1,
+        "available_count": 1,
+        "shift_template_name": ""
+      },
+      {
+        "equipment_id": "M005",
+        "category": "加工中心",
+        "total_count": 1,
+        "available_count": 1,
+        "shift_template_name": ""
+      },
+      {
+        "equipment_id": "M006",
+        "category": "加工中心",
+        "total_count": 1,
+        "available_count": 1,
+        "shift_template_name": ""
+      },
+      {
+        "equipment_id": "M007",
+        "category": "加工中心",
+        "total_count": 1,
+        "available_count": 1,
+        "shift_template_name": ""
+      },
+      {
+        "equipment_id": "M008",
+        "category": "加工中心",
+        "total_count": 1,
+        "available_count": 1,
+        "shift_template_name": ""
+      },
+      {
+        "equipment_id": "M009",
+        "category": "加工中心",
+        "total_count": 1,
+        "available_count": 1,
+        "shift_template_name": ""
+      },
+      {
+        "equipment_id": "M010",
+        "category": "加工中心",
+        "total_count": 1,
+        "available_count": 1,
+        "shift_template_name": ""
       }
     ],
-    "phases": [],
-    "employees": [],
+    "phase_templates": [
+      {
+        "name": "默认模板",
+        "phases": [
+          {
+            "name": "采购",
+            "planned_hours": 5.0,
+            "parallel_group": 0,
+            "equipment_id": "",
+            "assigned_employee": "hjz"
+          },
+          {
+            "name": "生产",
+            "planned_hours": 5.0,
+            "parallel_group": 0,
+            "equipment_id": "",
+            "assigned_employee": "hjz"
+          }
+        ]
+      },
+      {
+        "name": "A模版",
+        "phases": [
+          {
+            "name": "采购",
+            "planned_hours": 5.0,
+            "parallel_group": 0,
+            "equipment_id": "",
+            "assigned_employee": "hjz"
+          },
+          {
+            "name": "生产",
+            "planned_hours": 5.0,
+            "parallel_group": 0,
+            "equipment_id": "",
+            "assigned_employee": "hjz"
+          }
+        ]
+      }
+    ],
+    "active_phase_template": "默认模板",
+    "phases": [
+      {
+        "name": "采购",
+        "planned_hours": 5.0,
+        "parallel_group": 0,
+        "equipment_id": "",
+        "assigned_employee": "hjz"
+      },
+      {
+        "name": "生产",
+        "planned_hours": 5.0,
+        "parallel_group": 0,
+        "equipment_id": "",
+        "assigned_employee": "hjz"
+      }
+    ],
+    "employees": [
+      "abc",
+      "hjz",
+      "yqf"
+    ],
     "shifts": [
       {
         "name": "班次1",
         "week_plan": [
           {
-            "shift_count": 1,
+            "shift_count": 2,
             "hours_per_shift": 8.0
           },
           {
-            "shift_count": 1,
+            "shift_count": 2,
             "hours_per_shift": 8.0
           },
           {
-            "shift_count": 1,
+            "shift_count": 2,
             "hours_per_shift": 8.0
           },
           {
-            "shift_count": 1,
+            "shift_count": 2,
             "hours_per_shift": 8.0
           },
           {
-            "shift_count": 1,
+            "shift_count": 2,
             "hours_per_shift": 8.0
           },
           {

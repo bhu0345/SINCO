@@ -1,0 +1,796 @@
+{
+  "version": 3,
+  "factory_name": "默认工厂",
+  "employees": [
+    "abc",
+    "hjz",
+    "yqf"
+  ],
+  "equipment": [
+    {
+      "equipment_id": "C001",
+      "category": "车床",
+      "total_count": 1,
+      "available_count": 1,
+      "shift_template_name": "班次1"
+    },
+    {
+      "equipment_id": "C002",
+      "category": "车床",
+      "total_count": 1,
+      "available_count": 1,
+      "shift_template_name": ""
+    },
+    {
+      "equipment_id": "C003",
+      "category": "车床",
+      "total_count": 1,
+      "available_count": 1,
+      "shift_template_name": ""
+    },
+    {
+      "equipment_id": "C004",
+      "category": "车床",
+      "total_count": 1,
+      "available_count": 1,
+      "shift_template_name": ""
+    },
+    {
+      "equipment_id": "C005",
+      "category": "车床",
+      "total_count": 1,
+      "available_count": 1,
+      "shift_template_name": ""
+    },
+    {
+      "equipment_id": "C006",
+      "category": "车床",
+      "total_count": 1,
+      "available_count": 1,
+      "shift_template_name": ""
+    },
+    {
+      "equipment_id": "C007",
+      "category": "车床",
+      "total_count": 1,
+      "available_count": 1,
+      "shift_template_name": ""
+    },
+    {
+      "equipment_id": "C008",
+      "category": "车床",
+      "total_count": 1,
+      "available_count": 1,
+      "shift_template_name": ""
+    },
+    {
+      "equipment_id": "C009",
+      "category": "车床",
+      "total_count": 1,
+      "available_count": 1,
+      "shift_template_name": ""
+    },
+    {
+      "equipment_id": "M001",
+      "category": "加工中心",
+      "total_count": 1,
+      "available_count": 1,
+      "shift_template_name": ""
+    },
+    {
+      "equipment_id": "M002",
+      "category": "加工中心",
+      "total_count": 1,
+      "available_count": 1,
+      "shift_template_name": ""
+    },
+    {
+      "equipment_id": "M003",
+      "category": "加工中心",
+      "total_count": 1,
+      "available_count": 1,
+      "shift_template_name": ""
+    },
+    {
+      "equipment_id": "M004",
+      "category": "加工中心",
+      "total_count": 1,
+      "available_count": 1,
+      "shift_template_name": ""
+    },
+    {
+      "equipment_id": "M005",
+      "category": "加工中心",
+      "total_count": 1,
+      "available_count": 1,
+      "shift_template_name": ""
+    },
+    {
+      "equipment_id": "M006",
+      "category": "加工中心",
+      "total_count": 1,
+      "available_count": 1,
+      "shift_template_name": ""
+    },
+    {
+      "equipment_id": "M007",
+      "category": "加工中心",
+      "total_count": 1,
+      "available_count": 1,
+      "shift_template_name": ""
+    },
+    {
+      "equipment_id": "M008",
+      "category": "加工中心",
+      "total_count": 1,
+      "available_count": 1,
+      "shift_template_name": ""
+    },
+    {
+      "equipment_id": "M009",
+      "category": "加工中心",
+      "total_count": 1,
+      "available_count": 1,
+      "shift_template_name": ""
+    },
+    {
+      "equipment_id": "M010",
+      "category": "加工中心",
+      "total_count": 1,
+      "available_count": 1,
+      "shift_template_name": ""
+    }
+  ],
+  "orders": [
+    {
+      "version": 12,
+      "order_id": "订单1",
+      "start_dt": "2026-02-04T00:00:00",
+      "order_date": "2026-02-04",
+      "customer_code": "SWI",
+      "shipping_method": "空运",
+      "due_date": "2026-04-09",
+      "employees": [
+        "abc",
+        "hjz",
+        "yqf"
+      ],
+      "products": [
+        {
+          "product_id": "1",
+          "part_number": "",
+          "quantity": 10,
+          "produced_qty": 0,
+          "unit_weight_g": 0.0,
+          "phases": [
+            {
+              "name": "采购",
+              "planned_hours": 5.0,
+              "completed_hours": 0.0,
+              "parallel_group": 0,
+              "equipment_id": "",
+              "assigned_employee": "hjz"
+            },
+            {
+              "name": "生产",
+              "planned_hours": 5.0,
+              "completed_hours": 0.0,
+              "parallel_group": 0,
+              "equipment_id": "",
+              "assigned_employee": "hjz"
+            }
+          ]
+        }
+      ],
+      "events": [
+        {
+          "day": "2026-02-04",
+          "hours_lost": 8.0,
+          "reason": "员工请假",
+          "remark": ""
+        }
+      ],
+      "capacity_adjustments": [
+        {
+          "day": "2026-02-05",
+          "extra_hours": 2.0,
+          "reason": "",
+          "equipment_ids": []
+        }
+      ],
+      "defects": []
+    },
+    {
+      "version": 12,
+      "order_id": "订单2",
+      "start_dt": "2026-02-04T00:00:00",
+      "order_date": "2026-02-04",
+      "customer_code": "HYD",
+      "shipping_method": "空运",
+      "due_date": "2027-02-18",
+      "employees": [
+        "abc",
+        "hjz",
+        "yqf"
+      ],
+      "products": [
+        {
+          "product_id": "Buechse RFLD 883-D",
+          "part_number": "",
+          "quantity": 10,
+          "produced_qty": 0,
+          "unit_weight_g": 0.0,
+          "phases": [
+            {
+              "name": "采购",
+              "planned_hours": 100.0,
+              "completed_hours": 10.0,
+              "parallel_group": 0,
+              "equipment_id": "",
+              "assigned_employee": "生产"
+            },
+            {
+              "name": "生产",
+              "planned_hours": 100.0,
+              "completed_hours": 0.0,
+              "parallel_group": 0,
+              "equipment_id": "C001",
+              "assigned_employee": "hjz"
+            }
+          ]
+        }
+      ],
+      "events": [
+        {
+          "day": "2026-02-04",
+          "hours_lost": 8.5,
+          "reason": "员工请假",
+          "remark": ""
+        }
+      ],
+      "capacity_adjustments": [
+        {
+          "day": "2026-02-05",
+          "extra_hours": 2.0,
+          "reason": "",
+          "equipment_ids": [
+            "C001"
+          ]
+        }
+      ],
+      "defects": []
+    }
+  ],
+  "active_order_id": "订单2",
+  "app_logs": [
+    {
+      "timestamp": "2026-02-04T15:17:47.257500",
+      "user": "admin",
+      "content": "创建订单 订单1 (开始日期: 2026-02-04)",
+      "order_id": "订单1"
+    },
+    {
+      "timestamp": "2026-02-04T15:48:25.993362",
+      "user": "admin",
+      "content": "更新设备 C001 (类别: 车床, 总: 1, 可用: 1)",
+      "order_id": "订单1"
+    },
+    {
+      "timestamp": "2026-02-04T15:48:27.509981",
+      "user": "admin",
+      "content": "更新设备 C001 (类别: 车床, 总: 1, 可用: 1)",
+      "order_id": "订单1"
+    },
+    {
+      "timestamp": "2026-02-04T15:48:27.810171",
+      "user": "admin",
+      "content": "更新设备 C001 (类别: 车床, 总: 1, 可用: 1)",
+      "order_id": "订单1"
+    },
+    {
+      "timestamp": "2026-02-04T15:48:27.993586",
+      "user": "admin",
+      "content": "更新设备 C001 (类别: 车床, 总: 1, 可用: 1)",
+      "order_id": "订单1"
+    },
+    {
+      "timestamp": "2026-02-04T16:07:24.832664",
+      "user": "admin",
+      "content": "更新订单信息 (客户代码: HYD)",
+      "order_id": "订单1"
+    },
+    {
+      "timestamp": "2026-02-04T16:09:47.723355",
+      "user": "admin",
+      "content": "添加加班 2026-02-05 2h -",
+      "order_id": "订单1"
+    },
+    {
+      "timestamp": "2026-02-04T16:26:47.459543",
+      "user": "admin",
+      "content": "更新订单信息 (要求发货日期: 2026-04-09)",
+      "order_id": "订单1"
+    },
+    {
+      "timestamp": "2026-02-04T16:40:59.515595",
+      "user": "admin",
+      "content": "更新订单信息 (发货类别: 空运)",
+      "order_id": "订单1"
+    },
+    {
+      "timestamp": "2026-02-04T17:20:16.006272",
+      "user": "admin",
+      "content": "添加产品 1 (零件号: -, 数量: 10)",
+      "order_id": "订单1"
+    },
+    {
+      "timestamp": "2026-02-04T15:17:49.482743",
+      "user": "admin",
+      "content": "创建订单 订单2 (开始日期: 2026-02-04)",
+      "order_id": "订单2"
+    },
+    {
+      "timestamp": "2026-02-04T16:07:21.429426",
+      "user": "admin",
+      "content": "更新订单信息 (客户代码: HYD)",
+      "order_id": "订单2"
+    },
+    {
+      "timestamp": "2026-02-04T16:26:39.409234",
+      "user": "admin",
+      "content": "更新订单信息 (要求发货日期: 2027-02-18)",
+      "order_id": "订单2"
+    },
+    {
+      "timestamp": "2026-02-04T16:41:03.031051",
+      "user": "admin",
+      "content": "更新订单信息 (发货类别: 空运)",
+      "order_id": "订单2"
+    },
+    {
+      "timestamp": "2026-02-04T16:50:32.370179",
+      "user": "admin",
+      "content": "添加加班 2026-02-04 2h -",
+      "order_id": "订单2"
+    },
+    {
+      "timestamp": "2026-02-04T16:50:55.070397",
+      "user": "admin",
+      "content": "添加事件 2026-02-04 8h 其他",
+      "order_id": "订单2"
+    },
+    {
+      "timestamp": "2026-02-04T16:56:12.388248",
+      "user": "admin",
+      "content": "添加产品 Buechse RFLD 883-D (零件号: -, 数量: 1)",
+      "order_id": "订单2"
+    },
+    {
+      "timestamp": "2026-02-04T16:56:53.307192",
+      "user": "admin",
+      "content": "更新产品 Buechse RFLD 883-D (零件号: -, 数量: 10)",
+      "order_id": "订单2"
+    },
+    {
+      "timestamp": "2026-02-04T16:57:32.426111",
+      "user": "admin",
+      "content": "添加工序 采购 (产品: Buechse RFLD 883-D, 完成工时: 0h/100h)",
+      "order_id": "订单2"
+    },
+    {
+      "timestamp": "2026-02-04T16:57:47.659715",
+      "user": "admin",
+      "content": "添加员工 hjz",
+      "order_id": "订单2"
+    },
+    {
+      "timestamp": "2026-02-04T16:57:51.526820",
+      "user": "admin",
+      "content": "更新工序 采购 (产品: Buechse RFLD 883-D, 完成工时: 0h/100h)",
+      "order_id": "订单2"
+    },
+    {
+      "timestamp": "2026-02-04T16:57:56.993662",
+      "user": "admin",
+      "content": "更新工序 采购 (产品: Buechse RFLD 883-D, 完成工时: 0h/100h)",
+      "order_id": "订单2"
+    },
+    {
+      "timestamp": "2026-02-04T16:58:19.978493",
+      "user": "admin",
+      "content": "更新工序 采购 (产品: Buechse RFLD 883-D, 完成工时: 11h/100h)",
+      "order_id": "订单2"
+    },
+    {
+      "timestamp": "2026-02-04T16:58:31.812483",
+      "user": "admin",
+      "content": "添加工序 采购 (产品: Buechse RFLD 883-D, 完成工时: 100h/100h)",
+      "order_id": "订单2"
+    },
+    {
+      "timestamp": "2026-02-04T16:58:37.512524",
+      "user": "admin",
+      "content": "更新工序 采购 (产品: Buechse RFLD 883-D, 完成工时: 11h/100h)",
+      "order_id": "订单2"
+    },
+    {
+      "timestamp": "2026-02-04T16:58:39.612562",
+      "user": "admin",
+      "content": "更新工序 采购 (产品: Buechse RFLD 883-D, 完成工时: 11h/100h)",
+      "order_id": "订单2"
+    },
+    {
+      "timestamp": "2026-02-04T16:58:41.813120",
+      "user": "admin",
+      "content": "更新工序 采购 (产品: Buechse RFLD 883-D, 完成工时: 100h/100h)",
+      "order_id": "订单2"
+    },
+    {
+      "timestamp": "2026-02-04T16:58:48.096623",
+      "user": "admin",
+      "content": "删除工序 采购 (产品: Buechse RFLD 883-D)",
+      "order_id": "订单2"
+    },
+    {
+      "timestamp": "2026-02-04T17:00:31.985793",
+      "user": "admin",
+      "content": "更新工序 采购 (产品: Buechse RFLD 883-D, 完成工时: 0h/100h)",
+      "order_id": "订单2"
+    },
+    {
+      "timestamp": "2026-02-04T17:13:48.346098",
+      "user": "admin",
+      "content": "删除加班 2026-02-04 2h 设备:- -",
+      "order_id": "订单2"
+    },
+    {
+      "timestamp": "2026-02-04T17:40:32.889594",
+      "user": "admin",
+      "content": "更新工序 生产 (产品: Buechse RFLD 883-D, 完成工时: 0h/100h)",
+      "order_id": "订单2"
+    },
+    {
+      "timestamp": "2026-02-04T17:40:38.823187",
+      "user": "admin",
+      "content": "添加工序 采购 (产品: Buechse RFLD 883-D, 完成工时: 0h/100h)",
+      "order_id": "订单2"
+    },
+    {
+      "timestamp": "2026-02-04T17:41:00.291383",
+      "user": "admin",
+      "content": "更新工序 采购 (产品: Buechse RFLD 883-D, 完成工时: 0h/100h)",
+      "order_id": "订单2"
+    },
+    {
+      "timestamp": "2026-02-04T17:41:08.741742",
+      "user": "admin",
+      "content": "取消并行 (产品: Buechse RFLD 883-D, 工序数: 1)",
+      "order_id": "订单2"
+    },
+    {
+      "timestamp": "2026-02-04T17:41:54.928301",
+      "user": "admin",
+      "content": "更新并行组 生产 0 -> 1 (产品: Buechse RFLD 883-D)",
+      "order_id": "订单2"
+    },
+    {
+      "timestamp": "2026-02-04T17:41:56.529407",
+      "user": "admin",
+      "content": "更新并行组 采购 0 -> 1 (产品: Buechse RFLD 883-D)",
+      "order_id": "订单2"
+    },
+    {
+      "timestamp": "2026-02-04T17:42:01.894944",
+      "user": "admin",
+      "content": "设置并行组 2 (产品: Buechse RFLD 883-D, 工序数: 2)",
+      "order_id": "订单2"
+    },
+    {
+      "timestamp": "2026-02-04T17:42:05.762097",
+      "user": "admin",
+      "content": "取消并行 (产品: Buechse RFLD 883-D, 工序数: 2)",
+      "order_id": "订单2"
+    },
+    {
+      "timestamp": "2026-02-04T18:05:43.089759",
+      "user": "admin",
+      "content": "添加员工 abc",
+      "order_id": "订单2"
+    },
+    {
+      "timestamp": "2026-02-05T10:32:08.575770",
+      "user": "admin",
+      "content": "添加员工 abc",
+      "order_id": "订单2"
+    },
+    {
+      "timestamp": "2026-02-05T10:32:11.709242",
+      "user": "admin",
+      "content": "添加员工 hjz",
+      "order_id": "订单2"
+    },
+    {
+      "timestamp": "2026-02-05T10:32:15.726445",
+      "user": "admin",
+      "content": "更新工序 采购 (员工: hjz -> abc) (产品: Buechse RFLD 883-D)",
+      "order_id": "订单2"
+    },
+    {
+      "timestamp": "2026-02-05T10:32:28.493467",
+      "user": "admin",
+      "content": "添加员工 yqf",
+      "order_id": "订单2"
+    },
+    {
+      "timestamp": "2026-02-05T10:32:47.978046",
+      "user": "admin",
+      "content": "更新工序 采购 (员工: abc -> yqf) (产品: Buechse RFLD 883-D)",
+      "order_id": "订单2"
+    },
+    {
+      "timestamp": "2026-02-05T10:32:50.528622",
+      "user": "admin",
+      "content": "更新工序名称 生产 -> 采购 (产品: Buechse RFLD 883-D)",
+      "order_id": "订单2"
+    },
+    {
+      "timestamp": "2026-02-05T10:32:50.536231",
+      "user": "admin",
+      "content": "更新员工 采购 hjz -> yqf (产品: Buechse RFLD 883-D)",
+      "order_id": "订单2"
+    },
+    {
+      "timestamp": "2026-02-05T10:33:14.196468",
+      "user": "admin",
+      "content": "更新工序名称 采购 -> 生产 (产品: Buechse RFLD 883-D)",
+      "order_id": "订单2"
+    },
+    {
+      "timestamp": "2026-02-05T10:33:18.529592",
+      "user": "admin",
+      "content": "更新员工 生产 yqf -> hjz (产品: Buechse RFLD 883-D)",
+      "order_id": "订单2"
+    },
+    {
+      "timestamp": "2026-02-05T10:41:06.628831",
+      "user": "admin",
+      "content": "更新订单信息 (客户代码: HYD)",
+      "order_id": "订单2"
+    },
+    {
+      "timestamp": "2026-02-05T10:41:12.029067",
+      "user": "admin",
+      "content": "更新订单信息 (客户代码: SWI)",
+      "order_id": "订单1"
+    },
+    {
+      "timestamp": "2026-02-05T10:52:14.570539",
+      "user": "admin",
+      "content": "更新工序 采购 (完成工时: 0h -> 10h) (产品: Buechse RFLD 883-D)",
+      "order_id": "订单2"
+    },
+    {
+      "timestamp": "2026-02-05T10:53:43.582332",
+      "user": "admin",
+      "content": "添加事件 2026-02-04 8.5h 员工请假 -",
+      "order_id": "订单2"
+    },
+    {
+      "timestamp": "2026-02-05T10:53:52.127161",
+      "user": "admin",
+      "content": "删除事件 2026-02-04 8h 其他",
+      "order_id": "订单2"
+    },
+    {
+      "timestamp": "2026-02-05T10:54:53.067136",
+      "user": "admin",
+      "content": "添加加班 2026-02-04 2h 设备:C001 -",
+      "order_id": "订单2"
+    },
+    {
+      "timestamp": "2026-02-05T10:54:59.715397",
+      "user": "admin",
+      "content": "更新加班 2026-02-04 2h 设备:C001 -> 2026-02-05 2h 设备:C001",
+      "order_id": "订单2"
+    },
+    {
+      "timestamp": "2026-02-05T11:00:56.219518",
+      "user": "admin",
+      "content": "添加工序 包装 (产品: 1, 完成工时: 10h/90h)",
+      "order_id": "订单1"
+    },
+    {
+      "timestamp": "2026-02-05T11:01:03.203679",
+      "user": "admin",
+      "content": "添加工序 包装 (产品: 1, 完成工时: 10h/90h)",
+      "order_id": "订单1"
+    },
+    {
+      "timestamp": "2026-02-05T11:09:52.334230",
+      "user": "admin",
+      "content": "更新工序名称 包装 -> 生产 (产品: 1)",
+      "order_id": "订单1"
+    },
+    {
+      "timestamp": "2026-02-05T11:09:55.550351",
+      "user": "admin",
+      "content": "更新工序名称 包装 -> 生产 (产品: 1)",
+      "order_id": "订单1"
+    },
+    {
+      "timestamp": "2026-02-05T11:10:22.225124",
+      "user": "admin",
+      "content": "更新工序名称 生产 -> 包装 (产品: 1)",
+      "order_id": "订单1"
+    },
+    {
+      "timestamp": "2026-02-05T11:40:12.935545",
+      "user": "admin",
+      "content": "更新备忘录 2026-02-05 (admin)",
+      "order_id": "订单2"
+    },
+    {
+      "timestamp": "2026-02-05T12:06:40.134347",
+      "user": "admin",
+      "content": "更新员工 采购 yqf -> hjz (产品: Buechse RFLD 883-D)",
+      "order_id": "订单2"
+    },
+    {
+      "timestamp": "2026-02-05T12:09:51.737248",
+      "user": "admin",
+      "content": "更新员工 采购 hjz -> - (产品: Buechse RFLD 883-D)",
+      "order_id": "订单2"
+    },
+    {
+      "timestamp": "2026-02-05T12:11:11.158408",
+      "user": "admin",
+      "content": "更新工序 采购 (设备: C001 -> M002,M003) (产品: Buechse RFLD 883-D)",
+      "order_id": "订单2"
+    },
+    {
+      "timestamp": "2026-02-05T12:11:30.469397",
+      "user": "admin",
+      "content": "更新设备 采购 M002,M003 -> C006,C007,C008 (产品: Buechse RFLD 883-D)",
+      "order_id": "订单2"
+    },
+    {
+      "timestamp": "2026-02-05T12:11:56.371015",
+      "user": "admin",
+      "content": "更新设备 采购 C006,C007,C008 -> - (产品: Buechse RFLD 883-D)",
+      "order_id": "订单2"
+    },
+    {
+      "timestamp": "2026-02-05T12:13:04.032004",
+      "user": "admin",
+      "content": "更新并行组 采购 0 -> 1 (产品: Buechse RFLD 883-D)",
+      "order_id": "订单2"
+    },
+    {
+      "timestamp": "2026-02-05T12:13:13.982249",
+      "user": "admin",
+      "content": "更新员工 采购 - -> hjz (产品: Buechse RFLD 883-D)",
+      "order_id": "订单2"
+    },
+    {
+      "timestamp": "2026-02-05T12:13:16.001852",
+      "user": "admin",
+      "content": "更新员工 采购 hjz -> 生产 (产品: Buechse RFLD 883-D)",
+      "order_id": "订单2"
+    },
+    {
+      "timestamp": "2026-02-05T12:13:16.008646",
+      "user": "admin",
+      "content": "更新并行组 采购 1 -> 100 (产品: Buechse RFLD 883-D)",
+      "order_id": "订单2"
+    },
+    {
+      "timestamp": "2026-02-05T12:13:30.616941",
+      "user": "admin",
+      "content": "设置并行组 101 (产品: Buechse RFLD 883-D, 工序数: 2)",
+      "order_id": "订单2"
+    },
+    {
+      "timestamp": "2026-02-05T12:13:36.716700",
+      "user": "admin",
+      "content": "取消并行 (产品: Buechse RFLD 883-D, 工序数: 2)",
+      "order_id": "订单2"
+    },
+    {
+      "timestamp": "2026-02-05T12:36:40.225279",
+      "user": "admin",
+      "content": "调整工序顺序 1 -> 2 (产品: 1)",
+      "order_id": "订单1"
+    },
+    {
+      "timestamp": "2026-02-05T12:36:40.708304",
+      "user": "admin",
+      "content": "调整工序顺序 2 -> 1 (产品: 1)",
+      "order_id": "订单1"
+    },
+    {
+      "timestamp": "2026-02-05T12:36:47.190383",
+      "user": "admin",
+      "content": "调整工序顺序 1 -> 2 (产品: 1)",
+      "order_id": "订单1"
+    },
+    {
+      "timestamp": "2026-02-05T12:36:48.124616",
+      "user": "admin",
+      "content": "调整工序顺序 2 -> 1 (产品: 1)",
+      "order_id": "订单1"
+    },
+    {
+      "timestamp": "2026-02-05T12:37:21.177681",
+      "user": "admin",
+      "content": "取消并行 (产品: 1, 工序数: 2)",
+      "order_id": "订单1"
+    },
+    {
+      "timestamp": "2026-02-05T12:37:43.661150",
+      "user": "admin",
+      "content": "设置并行组 1 (产品: 1, 工序数: 2)",
+      "order_id": "订单1"
+    },
+    {
+      "timestamp": "2026-02-05T12:37:52.561349",
+      "user": "admin",
+      "content": "取消并行 (产品: 1, 工序数: 2)",
+      "order_id": "订单1"
+    },
+    {
+      "timestamp": "2026-02-05T12:41:48.293685",
+      "user": "admin",
+      "content": "应用工序模板到产品 1 (工序数: 2)",
+      "order_id": "订单1"
+    },
+    {
+      "timestamp": "2026-02-05T12:41:49.227132",
+      "user": "admin",
+      "content": "应用工序模板到产品 1 (工序数: 2)",
+      "order_id": "订单1"
+    },
+    {
+      "timestamp": "2026-02-05T12:41:51.195447",
+      "user": "admin",
+      "content": "应用工序模板到产品 1 (工序数: 2)",
+      "order_id": "订单1"
+    },
+    {
+      "timestamp": "2026-02-05T12:41:51.395081",
+      "user": "admin",
+      "content": "应用工序模板到产品 1 (工序数: 2)",
+      "order_id": "订单1"
+    },
+    {
+      "timestamp": "2026-02-05T12:43:37.134291",
+      "user": "admin",
+      "content": "添加事件 2026-02-04 8h 员工请假 -",
+      "order_id": "订单1"
+    },
+    {
+      "timestamp": "2026-02-05T12:53:11.188921",
+      "user": "admin",
+      "content": "取消并行 (产品: 1, 工序数: 1)",
+      "order_id": "订单1"
+    },
+    {
+      "timestamp": "2026-02-05T12:53:13.789091",
+      "user": "admin",
+      "content": "取消并行 (产品: 1, 工序数: 2)",
+      "order_id": "订单1"
+    },
+    {
+      "timestamp": "2026-02-05T12:54:18.096285",
+      "user": "admin",
+      "content": "同步设备列表 (设备数: 19)",
+      "order_id": "订单2"
+    }
+  ],
+  "memos": [
+    {
+      "day": "2026-02-05",
+      "user": "admin",
+      "content": "test 123"
+    }
+  ]
+}
