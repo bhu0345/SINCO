@@ -7,6 +7,10 @@ on:
       - main
       - master
 
+defaults:
+  run:
+    working-directory: "Manufacturing Optimization"
+
 jobs:
   build-windows:
     runs-on: windows-latest
@@ -32,4 +36,4 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: 生产交期预测系统-windows
-          path: dist/生产交期预测系统/
+          path: "Manufacturing Optimization/dist/生产交期预测系统/"
